@@ -203,9 +203,8 @@ export default function LandingPage() {
           </button>
         </div>
 
-        {loadingLobbies && <p style={{ color: "var(--text-muted)", fontSize: "0.85rem" }}>{t("loadingLobbies")}</p>}
         {listError && <p className="error">{listError}</p>}
-        {!loadingLobbies && !listError && lobbies.length === 0 && (
+        {!listError && lobbies.length === 0 && (
           <p style={{ color: "var(--text-muted)", fontSize: "0.85rem" }}>{t("noActiveLobbies")}</p>
         )}
 
@@ -248,9 +247,8 @@ export default function LandingPage() {
           </button>
         </div>
 
-        {loadingGames && <p style={{ color: "var(--text-muted)", fontSize: "0.85rem" }}>{t("loadingGames")}</p>}
         {gamesError && <p className="error">{gamesError}</p>}
-        {!loadingGames && !gamesError && games.length === 0 && (
+        {!gamesError && games.length === 0 && (
           <p style={{ color: "var(--text-muted)", fontSize: "0.85rem" }}>{t("noOngoingGames")}</p>
         )}
 

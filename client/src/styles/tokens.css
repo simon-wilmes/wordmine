@@ -9,13 +9,14 @@
   /* Dark surfaces */
   --surface: #120610;
   --surface-raised: #1c0e18;
+  --surface-raised-glass: rgba(28, 14, 24, 0.45);
   --surface-highlight: #261520;
   --border: rgba(249, 220, 18, 0.14);
   --border-strong: rgba(249, 220, 18, 0.32);
 
   /* Text */
   --text: #f0e8d0;
-  --text-muted: rgba(240, 232, 208, 0.52);
+  --text-muted: rgba(240, 232, 208, 0.92);
   --text-dark: #1a0d1a;
 
   /* Accent */
@@ -57,10 +58,10 @@
   --timer-clue-text: #f9dc12;
   --timer-guess-bg: rgba(237, 105, 43, 0.12);
   --timer-guess-border: rgba(237, 105, 43, 0.42);
-  --timer-guess-text: #ed692b;
+  --timer-guess-text: #f4a574;
   --timer-reveal-bg: rgba(164, 31, 74, 0.12);
   --timer-reveal-border: rgba(164, 31, 74, 0.38);
-  --timer-reveal-text: #d4507a;
+  --timer-reveal-text: #f0809e;
 
   /* Typography */
   --font-heading: 'Oswald', sans-serif;

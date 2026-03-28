@@ -180,9 +180,16 @@ function scheduleClueTimer(lobbyId) {
     if (!liveGame || !liveGame.round || liveGame.round.phase !== "clue") {
       return;
     }
-    finishRound(liveGame);
-    scheduleRoundEndTimer(lobbyId);
-    await emitGameStateToLobby(lobbyId);
+    // Notify clients that clue time is up — give the clue giver a chance to auto-submit
+    io.to(lobbyId).emit("clue-time-up");
+    // Fallback: if no submit/cant-submit arrives within 5s, skip the round
+    liveGame.timers.clueGrace = setTimeout(async () => {
+      const g = getGame(lobbyId);
+      if (!g || !g.round || g.round.phase !== "clue") return;
+      finishRound(g);
+      scheduleRoundEndTimer(lobbyId);
+      await emitGameStateToLobby(lobbyId);
+    }, 5000);
   }, Math.max(0, game.config.cluePhaseSeconds * 1000));
 }
 
@@ -372,8 +379,25 @@ io.on("connection", (socket) => {
       clearTimeout(gameAfterClue.timers.clue);
       gameAfterClue.timers.clue = null;
     }
+    if (gameAfterClue?.timers?.clueGrace) {
+      clearTimeout(gameAfterClue.timers.clueGrace);
+      gameAfterClue.timers.clueGrace = null;
+    }
     await emitGameStateToLobby(lobbyId);
     if (ack) ack({ ok: true });
+  });
+
+  socket.on("game:cant-submit-clue", async (payload) => {
+    const lobbyId = payload?.lobbyId || socket.data.lobbyId;
+    const game = getGame(lobbyId);
+    if (!game || !game.round || game.round.phase !== "clue") return;
+    if (game.timers.clueGrace) {
+      clearTimeout(game.timers.clueGrace);
+      game.timers.clueGrace = null;
+    }
+    finishRound(game);
+    scheduleRoundEndTimer(lobbyId);
+    await emitGameStateToLobby(lobbyId);
   });
 
   socket.on("game:send-message", async (payload, ack) => {

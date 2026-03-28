@@ -58,13 +58,11 @@ p { margin-top: 0; }
    CARD SURFACE
    ============================================================ */
 .card {
-  background: var(--surface);
+  background: var(--surface-raised-glass);
   border: 1px solid var(--border);
   border-radius: 16px;
   padding: 22px;
-  box-shadow:
-    0 8px 32px rgba(0, 0, 0, 0.45),
-    0 0 0 1px rgba(249, 220, 18, 0.06) inset;
+  box-shadow: none;
 }
 
 /* ============================================================
@@ -221,7 +219,7 @@ small {
 
 .modal {
   width: min(440px, 100%);
-  background: var(--surface-raised);
+  background: var(--surface-raised-glass);
   border: 1px solid var(--border-strong);
   border-radius: 16px;
   padding: 24px;
@@ -351,7 +349,7 @@ small {
   border: 1px solid var(--border);
   border-radius: 12px;
   padding: 14px 16px;
-  background: var(--surface-raised);
+  background: var(--surface-raised-glass);
   transition: border-color 0.15s;
 }
 
@@ -418,7 +416,7 @@ small {
   display: flex;
   align-items: center;
   gap: 10px;
-  background: var(--surface-raised);
+  background: var(--surface-raised-glass);
   border: 1px solid var(--border);
   border-radius: 10px;
   padding: 10px 14px;
@@ -567,6 +565,7 @@ small {
   min-height: 180px;
 }
 
+
 /* ============================================================
    GAME PAGE — LEFT PANEL (SCORES)
    ============================================================ */
@@ -586,7 +585,7 @@ small {
   counter-increment: rank;
   padding: 8px 10px;
   border-radius: 8px;
-  background: var(--surface-raised);
+  background: var(--surface-raised-glass);
   border: 1px solid var(--border);
 }
 
@@ -707,20 +706,34 @@ small {
   font-family: var(--font-mono);
   font-size: 0.8rem;
   color: var(--text-muted);
-  background: var(--surface-raised);
+  background: var(--surface-raised-glass);
   border: 1px solid var(--border);
   border-radius: 6px;
   padding: 2px 8px;
 }
 
-.handler-info {
-  font-size: 0.82rem;
-  color: var(--text-muted);
-  margin-bottom: 12px;
+.game-badges-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
-.handler-info strong {
+.role-badge,
+.handler-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  border-radius: 999px;
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  background: var(--surface-raised-glass);
   color: var(--text);
+  border: 1px solid var(--border);
 }
 
 /* ============================================================
@@ -742,7 +755,8 @@ small {
   bottom: 0;
   z-index: 1;
   padding: 12px 18px 18px;
-  background: rgba(12, 10, 10, 0.9);
+  background: var(--surface-raised-glass);
+  backdrop-filter: blur(8px);
   border-top: 1px solid var(--border);
   box-shadow: 0 -12px 24px rgba(0, 0, 0, 0.35);
 }
@@ -1149,7 +1163,7 @@ small {
   border: 1px solid rgba(249, 220, 18, 0.22);
   border-radius: 12px;
   padding: 16px;
-  background: var(--surface-raised);
+  background: var(--surface-raised-glass);
 }
 
 .clue-box h3 {
@@ -1269,7 +1283,7 @@ small {
 }
 
 .operative-item {
-  background: var(--surface-raised);
+  background: var(--surface-raised-glass);
   border: 1px solid var(--border);
   border-radius: 10px;
   padding: 10px 12px;
@@ -1314,7 +1328,7 @@ small {
 }
 
 .my-status-box {
-  background: var(--surface-raised);
+  background: var(--surface-raised-glass);
   border: 1px solid rgba(249, 220, 18, 0.18);
   border-radius: 10px;
   padding: 12px;
@@ -1446,7 +1460,7 @@ small {
   border-radius: 14px;
   padding: 18px 16px;
   border: 1px solid var(--border);
-  background: var(--surface-raised);
+  background: var(--surface-raised-glass);
   position: relative;
   overflow: hidden;
 }
@@ -1590,7 +1604,7 @@ small {
   padding: 10px 14px;
   border: 1px solid var(--border);
   border-radius: 10px;
-  background: var(--surface-raised);
+  background: var(--surface-raised-glass);
 }
 
 .end-list-rank {
@@ -1654,7 +1668,7 @@ small {
   font-weight: 700;
   line-height: 1;
   padding: 4px 14px;
-  background: var(--surface-raised);
+  background: var(--surface-raised-glass);
   border: 1px solid var(--border);
   border-radius: 10px;
 }
@@ -1763,9 +1777,9 @@ small {
   width: 100%;
   border-radius: 16px;
   overflow: hidden;
-  background: linear-gradient(135deg, var(--surface-raised) 0%, var(--surface) 100%);
+  background: var(--surface-raised-glass);
   border: 1.5px solid rgba(249, 220, 18, 0.25);
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  box-shadow: none;
   position: relative;
 }
 
@@ -1787,7 +1801,7 @@ small {
   border-radius: 8px;
   overflow: hidden;
   border: 1px solid rgba(249, 220, 18, 0.18);
-  background: var(--surface);
+  background: transparent;
   position: relative;
 }
 
@@ -1796,7 +1810,6 @@ small {
   height: 100%;
   object-fit: cover;
   display: block;
-  mix-blend-mode: lighten;
 }
 
 .agent-card__info {
@@ -1819,7 +1832,7 @@ small {
   font-size: 0.6rem;
   letter-spacing: 0.14em;
   color: #f9dc12;
-  opacity: 0.7;
+  opacity: 1;
 }
 
 .agent-card__op-name {
@@ -1855,7 +1868,7 @@ small {
   font-size: 0.55rem;
   letter-spacing: 0.12em;
   color: #ed692b;
-  opacity: 0.6;
+  opacity: 1;
 }
 
 .agent-card__field-value {
@@ -1895,7 +1908,7 @@ small {
   transform: rotate(12deg);
   border: 2.5px solid #c8243a;
   padding: 2px 10px;
-  opacity: 0.75;
+  opacity: 1;
   pointer-events: none;
 }
 

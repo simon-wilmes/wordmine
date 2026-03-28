@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { getLobby } from "../lib/api";
 import StatsChips from "../components/game/StatsChips";
@@ -32,6 +32,11 @@ export default function GamePage() {
   const isClueGiver = game?.role === "clue-giver";
   const isClueAll = game?.role === "clue-all";
   const isGuesser = game?.role === "guesser";
+
+  const clueRef = useRef(clue);
+  const selectedCardsRef = useRef(selectedCards);
+  clueRef.current = clue;
+  selectedCardsRef.current = selectedCards;
   const myFinished = Boolean(game?.myGuesserState?.finished);
 
   // How many target cards have been correctly found:
@@ -169,6 +174,28 @@ export default function GamePage() {
 
     return () => clearInterval(interval);
   }, [game?.phaseStartedAt, game?.phase, game?.config]);
+
+  // Auto-submit clue when server signals time is up
+  useEffect(() => {
+    const socket = getSocket();
+    function onClueTimeUp() {
+      if (!isClueGiver && !isClueAll) {
+        return;
+      }
+      const pendingClue = clueRef.current.trim();
+      const pendingCards = selectedCardsRef.current;
+      if (pendingClue.length >= 2 && pendingCards.length >= 1) {
+        socket.emit("game:submit-clue", {
+          lobbyId, playerId, clue: pendingClue,
+          clueCount: pendingCards.length, selectedIndexes: pendingCards,
+        });
+      } else {
+        socket.emit("game:cant-submit-clue", { lobbyId, playerId });
+      }
+    }
+    socket.on("clue-time-up", onClueTimeUp);
+    return () => socket.off("clue-time-up", onClueTimeUp);
+  }, [lobbyId, playerId, isClueGiver, isClueAll]);
 
   function toggleClueCard(index) {
     if (!isClueGiver && !isClueAll) return;
@@ -353,26 +380,27 @@ export default function GamePage() {
         <div className="game-header">
           <div className="game-title-block">
             <h1>{t("codenamesVariant")}</h1>
-            <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
+            <div className="game-badges-row">
               <span className={`phase-badge phase-${game.phase}`}>
                 {PHASE_LABELS[game.phase] || game.phase}
               </span>
-              <span style={{ fontSize: "0.8rem", color: "var(--text-muted)" }}>
-                {t("role")}: <strong style={{ color: "var(--text)" }}>{game.role}</strong>
+              <span className="role-badge">
+                {t("role")}: {game.role}
               </span>
+              {game.phase !== "clue-all" && (
+                <span className="handler-badge">
+                  {t("clueGiver")}: {game.clueGiver.name}
+                </span>
+              )}
+              {game.phase === "clue-all" && (
+                <span className="handler-badge">
+                  {t("simultaneousCluePhase")}
+                </span>
+              )}
             </div>
           </div>
           <button className="ghost" onClick={() => navigate("/")}>{t("backToLanding")}</button>
         </div>
-
-        {game.phase !== "clue-all" && (
-          <p className="handler-info">
-            {t("clueGiver")}: <strong>{game.clueGiver.name}</strong>
-          </p>
-        )}
-        {game.phase === "clue-all" && (
-          <p className="handler-info">{t("simultaneousCluePhase")}</p>
-        )}
 
         {error && <p className="error">{error}</p>}
 
