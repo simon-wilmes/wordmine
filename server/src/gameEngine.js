@@ -66,14 +66,15 @@ function buildBoard(language = "en", greenCards = 14, redCards = 10, blackCards 
   const totalCards = greenCards + redCards + blackCards;
   const words = pickWords(totalCards, language);
   const indexes = shuffle(Array.from({ length: totalCards }, (_, i) => i));
-  const green = indexes.slice(0, greenCards);
-  const red = indexes.slice(greenCards, greenCards + redCards);
-  const black = indexes[greenCards + redCards];
+  const green = new Set(indexes.slice(0, greenCards));
+  const red = new Set(indexes.slice(greenCards, greenCards + redCards));
+  const black = new Set(indexes.slice(greenCards + redCards, greenCards + redCards + blackCards));
 
   const cards = words.map((word, index) => {
     let role = "red";
-    if (green.includes(index)) role = "green";
-    else if (index === black) role = "black";
+    if (green.has(index)) role = "green";
+    else if (black.has(index)) role = "black";
+    else if (red.has(index)) role = "red";
 
     return {
       index,
