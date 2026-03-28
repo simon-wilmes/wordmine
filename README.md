@@ -1,4 +1,4 @@
-# Codename Competition
+# Codename Competition aka Wordmine
 
 Realtime multiplayer Codenames-inspired party game with private/public lobbies, invite links, host-configurable rules, per-round scoring, in-game chat, and bilingual support (English/German).
 
