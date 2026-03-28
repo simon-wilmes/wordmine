@@ -1,0 +1,69 @@
+:root {
+  /* Brand palette (from original Codenames box art) */
+  --brand-yellow: #f9dc12;
+  --brand-orange: #ed692b;
+  --brand-red-mid: #a41f4a;
+  --brand-red-dark: #721446;
+  --brand-red-deep: #8d173a;
+
+  /* Dark surfaces */
+  --surface: #1c0b18;
+  --surface-raised: #261520;
+  --surface-highlight: #301a2a;
+  --border: rgba(249, 220, 18, 0.14);
+  --border-strong: rgba(249, 220, 18, 0.32);
+
+  /* Text */
+  --text: #f0e8d0;
+  --text-muted: rgba(240, 232, 208, 0.52);
+  --text-dark: #1a0d1a;
+
+  /* Accent */
+  --accent: #ed692b;
+  --accent-hover: #c8551e;
+  --accent-yellow: #f9dc12;
+
+  /* Semantic */
+  --error: #e05555;
+  --success: #3dc46a;
+
+  /* Game card faces */
+  --card-face: #f0e8d0;
+  --card-face-text: #1a0d1a;
+  --card-face-border: rgba(26, 13, 26, 0.18);
+
+  /* Card type colors */
+  --card-agent: #1a6e4e;
+  --card-agent-selected: #13b876;
+  --card-enemy: #8d173a;
+  --card-assassin: #0d0508;
+  --card-neutral-guessed: #4a3d30;
+
+  /* Reveal states */
+  --card-reveal-target: #13b876;
+  --card-reveal-agent: #2a5c40;
+  --card-reveal-enemy: #8d173a;
+  --card-reveal-assassin: #0d0508;
+
+  /* Guess result states */
+  --card-guess-correct: #17c878;
+  --card-guess-neutral: #8a7a5e;
+  --card-guess-red: #a8224a;
+  --card-guess-black: #1a0c10;
+
+  /* Timer variants */
+  --timer-clue-bg: rgba(249, 220, 18, 0.12);
+  --timer-clue-border: rgba(249, 220, 18, 0.38);
+  --timer-clue-text: #f9dc12;
+  --timer-guess-bg: rgba(237, 105, 43, 0.12);
+  --timer-guess-border: rgba(237, 105, 43, 0.42);
+  --timer-guess-text: #ed692b;
+  --timer-reveal-bg: rgba(164, 31, 74, 0.12);
+  --timer-reveal-border: rgba(164, 31, 74, 0.38);
+  --timer-reveal-text: #d4507a;
+
+  /* Typography */
+  --font-heading: 'Oswald', sans-serif;
+  --font-mono: 'Space Mono', monospace;
+  --font-body: 'Inter', sans-serif;
+}

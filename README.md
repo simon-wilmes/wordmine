@@ -1,0 +1,257 @@
+# Codename Competition
+
+Realtime multiplayer Codenames-inspired party game with private/public lobbies, invite links, host-configurable rules, per-round scoring, in-game chat, and bilingual support (English/German).
+
+## What This Project Does
+
+- Create and join lobbies (public or private) with invite links
+- Start realtime matches over Socket.io with configurable rules
+- Two game modes: **standard** (rotating clue giver) and **simultaneous clue** (all players give clues, then guess in sequence)
+- Track guesses, penalties, round timing, and cumulative scores
+- In-game chat with rate limiting and automatic round-score breakdowns
+- Round-end board reveal + end-game podium with detailed stats
+- Rematch flow: host creates a new lobby with same settings, other players join with one click
+- Spectator mode for watching live games
+- Reconnect on page refresh (player identity stored in localStorage per lobby)
+- Bilingual: board word language per lobby (`en`/`de`) + UI language toggle (`en`/`de`)
+
+## Tech Stack
+
+- **Client:** React 18 + Vite 5 + React Router 6 + Socket.io Client 4
+- **Server:** Node.js + Express 4 + Socket.io 4
+- **State:** In-memory (resets on server restart)
+- **Styling:** Plain CSS with design tokens (`styles/tokens.css`)
+- **i18n:** Custom context-based provider (`lib/i18n.jsx`), no external library
+- **Production:** Server serves built client at `/${GAME_NAME}` (default: `/wordmine`), configured for Cloudflare Tunnel via `https://games.wilmes.dev`
+
+## Quick Start
+
+### 1) Server
+
+```bash
+cd server
+npm install
+npm run dev
+```
+
+Server default: `http://localhost:3001`
+
+### 2) Client
+
+```bash
+cd client
+npm install
+npm run dev
+```
+
+Client default: `http://localhost:5173`
+
+### Configuration
+
+The game name prefix is defined in `.env` at the project root:
+
+```
+GAME_NAME=wordmine
+```
+
+All URLs are served under `/${GAME_NAME}/` (e.g., `/wordmine/`, `/wordmine/api/...`, `/wordmine/lobby/:id`). To rename the game, change this single value and restart. No domain is hardcoded — the app works on `localhost`, `games.wilmes.dev`, or any other host.
+
+### Production Build
+
+```bash
+cd client && npm run build
+cd ../server && node src/index.js
+```
+
+Or use the startup script (sources `.env` automatically):
+
+```bash
+./start-production.sh
+```
+
+The server serves the built client from `client/dist` at the `/${GAME_NAME}` path.
+
+## Game Modes
+
+### Standard Mode
+
+Each round, one player is the clue giver and the rest are guessers. The clue giver role rotates. Total rounds = `cycles * playerCount`.
+
+### Simultaneous Clue Mode (`simultaneousClue: true`)
+
+All players give clues on the same board during a shared clue phase. Then each clue is played out as a sub-round where all other players guess. Total rounds = `cycles` (each round has N sub-rounds where N = playerCount).
+
+## Game Rules
+
+Each round uses a 5x5 board:
+
+- 14 green cards (possible correct targets)
+- 10 red cards (penalty)
+- 1 black card (heavy penalty / instant stop)
+
+Flow per round:
+
+1. Clue giver selects a subset of green cards and submits a one-word clue + count
+2. Guessers single-click to mark cards, double-click to commit a guess
+3. Outcomes:
+   - Green card that was selected by clue giver: **correct** (points)
+   - Green card not selected: **neutral** (no points, no penalty, no stop)
+   - Red card: **penalty**; on second red the guesser is finished for the round
+   - Black card: **heavy penalty**; guesser finished immediately
+4. Round ends when all targets found, all guessers finished, or timer expires
+5. Reveal phase shows the full board for a configurable pause, then next round
+
+### Scoring
+
+- `clueCardValue` (default 300): points distributed among guessers who found each target card
+- `guesserCardPool` (default 200): points distributed by time-weighted ranking per card
+- `rankBonus1/2/3` (default 50/25/15): bonus for 1st/2nd/3rd guesser to find each card
+- `redPenalty` (default 50): deducted for guessing a red card
+- `blackPenalty` (default 200): deducted for guessing the black card
+- `penalizeClueGiverForWrongGuesses`: optionally deduct from clue giver when their guessers hit red/black
+
+## Configuration (Host)
+
+All settings are per-lobby, editable before game start:
+
+| Setting | Range | Description |
+|---------|-------|-------------|
+| `visibility` | `public` / `private` | Whether lobby appears in public list |
+| `wordLanguage` | `en` / `de` | Board word source file |
+| `cycles` | 1-30 | Number of full rotations through players |
+| `simultaneousClue` | bool | Enable simultaneous clue mode |
+| `cluePhaseSeconds` | -1, 0, or 1-600 | Clue time limit (-1 or 0 = unlimited) |
+| `guessPhaseSeconds` | 10-600 | Guess time limit |
+| `betweenRoundsSeconds` | 0-120 | Reveal/pause duration |
+| `clueCardValue` | 1-2000 | Points per target card |
+| `guesserCardPool` | 1-2000 | Bonus pool per card |
+| `rankBonus1/2/3` | 0-2000 | Rank bonuses |
+| `redPenalty` | 0-2000 | Red card penalty |
+| `blackPenalty` | 0-5000 | Black card penalty |
+| `penalizeClueGiverForWrongGuesses` | bool | Clue giver shares penalties |
+
+## Chat System
+
+In-game chat panel ("Terminal") with:
+
+- Player messages with rate limiting (1 message/second)
+- Max message length: 1000 chars, max total chat: 10000 chars
+- Link blocking (URLs filtered)
+- Automatic system messages after each round showing per-player score breakdowns with itemized point gains/losses
+- Spectators can read chat but not send messages
+
+## Lobby & Session Flow
+
+1. **Create lobby** (`POST /api/lobbies`) — returns `lobbyId` + `playerId` (host)
+2. **Join lobby** (`POST /api/lobbies/:id/join`) — returns `playerId` for the new player
+3. **Connect socket** (`join-lobby` event) — joins the Socket.io room, marks player connected
+4. **Start game** (`start-game` event) — host only, requires 2+ players
+5. **Play** — game state pushed to each player via `game-state` with role-appropriate views
+6. **Game over** — podium screen with stats; host can create a rematch lobby
+7. **Disconnect** — player marked offline but not removed; reconnect via stored `playerId` in localStorage
+
+Player identity is stored in `localStorage` as a map of `lobbyId -> playerId`, allowing reconnect on page refresh and tracking "Your Games" on the landing page.
+
+## API & Realtime Contracts
+
+### REST
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/lobbies` | List public waiting lobbies |
+| `GET` | `/api/games` | List public in-progress games |
+| `POST` | `/api/lobbies` | Create lobby (body: `name`, `visibility`) |
+| `GET` | `/api/lobbies/:id` | Get lobby + game status |
+| `POST` | `/api/lobbies/:id/join` | Join lobby (body: `name`, `viaInvite`) |
+
+### Socket Events
+
+**Client -> Server:**
+
+| Event | Description |
+|-------|-------------|
+| `join-lobby` | Join socket room (with or without `playerId` for spectating) |
+| `leave-lobby` | Leave and remove player from lobby |
+| `update-settings` | Host updates lobby settings |
+| `start-game` | Host starts the game |
+| `kick-player` | Host kicks a player |
+| `game:get-state` | Request current game view |
+| `game:submit-clue` | Submit clue word + selected card indexes |
+| `game:mark-card` | Toggle mark on a card (visual only) |
+| `game:guess-card` | Commit a guess on a card |
+| `game:send-message` | Send chat message |
+| `game:request-rematch` | Host: create rematch lobby; others: join it |
+
+**Server -> Client:**
+
+| Event | Description |
+|-------|-------------|
+| `lobby-updated` | Lobby state changed (players, settings) |
+| `lobby-closed` | Lobby was deleted (host left or kicked) |
+| `game-started` | Game has begun, navigate to game page |
+| `game-state` | Per-player game view (role-filtered) |
+| `kicked-from-lobby` | You were kicked by the host |
+
+## Project Structure
+
+```text
+codename-competition/
+  README.md
+  words-en.txt              # English word list (one word per line, 25+ required)
+  words-de.txt              # German word list
+  client/
+    src/
+      App.jsx               # React Router setup (/, /lobby/:id, /game/:id)
+      styles.css             # All component styles + responsive breakpoints
+      styles/tokens.css      # CSS custom properties (colors, spacing, fonts)
+      lib/
+        api.js              # REST client (fetch wrappers)
+        socket.js           # Socket.io client singleton
+        i18n.jsx            # I18n context provider + translation maps (en/de)
+        gameViewModel.js    # Card CSS class logic + marker name resolution
+        session.js          # localStorage read/write for playerId per lobby
+      components/
+        common/LanguageToggle.jsx   # UI language switcher
+        game/StatsChips.jsx         # Colored stat badges (correct/neutral/red/black)
+      pages/
+        LandingPage.jsx     # Create/join lobbies, see active games, rejoin yours
+        LobbyPage.jsx       # Lobby waiting room, settings, player list, invite link
+        GamePage.jsx        # Active game board + chat + game-over podium
+  server/
+    src/
+      index.js              # Express server, Socket.io event handlers, phase timers
+      store.js              # Lobby CRUD, player management, settings validation
+      gameEngine.js         # Game state machine, board gen, scoring, chat, view payloads
+```
+
+## Where Logic Lives
+
+- **Lobby management & validation:** `server/src/store.js` — create/join/leave/kick, settings validation with range checks
+- **Game state machine:** `server/src/gameEngine.js` — board generation (random card placement), round lifecycle, clue submission, guess resolution, scoring algorithm, chat management, per-player view filtering (clue giver sees all, guesser sees own state, spectator sees reveal)
+- **Orchestration & timers:** `server/src/index.js` — HTTP routes, Socket.io event wiring, phase timeout scheduling (clue → guess → round-end → next round), game state broadcasting
+- **Client state:** GamePage holds game state received from `game-state` socket events; no client-side game logic beyond UI interaction (mark/guess/submit)
+
+## Language Features
+
+### Board Word Language (per lobby)
+
+Words loaded from `words-en.txt` / `words-de.txt` at server startup. Host selects language in lobby settings. The server uses the selected file when generating each round's board.
+
+### UI Language (per browser)
+
+Global toggle in top-right corner. Switches all interface text between English and German. Stored in `localStorage` (`uiLanguage` key). Falls back to English for missing keys.
+
+## Troubleshooting
+
+- **`EADDRINUSE:3001`** — Another server process is running. Stop it or free port 3001.
+- **Empty/failed build after refactor** — Run `npm run build` in `client/` and `node --check server/src/*.js`.
+- **Words not changing by language** — Verify `wordLanguage` is saved in lobby settings before starting. Ensure word files exist with 25+ lines.
+- **Player can't rejoin after refresh** — Check that `localStorage` has the `lobbyPlayers` entry for that lobby. The server keeps the player slot on disconnect; only explicit `leave-lobby` removes it.
+- **Game state not updating** — Verify the socket is connected and joined to the correct lobby room. Check browser console for socket errors.
+
+## Notes
+
+- Storage is in-memory; restarting the server resets all lobbies and games.
+- Private lobbies are not visible in the public list but are joinable via invite link.
+- The rematch flow creates a new private lobby with cloned settings; the old game is not reused.
+- Spectators join by navigating to a game URL without a stored `playerId` for that lobby.
