@@ -159,7 +159,7 @@ input:focus, select:focus {
 }
 
 select option {
-  background: #1c0b18;
+  background: var(--surface);
   color: var(--text);
 }
 
@@ -283,13 +283,31 @@ small {
 /* ============================================================
    LANDING PAGE
    ============================================================ */
+.hero-row {
+  display: flex;
+  gap: 18px;
+  align-items: stretch;
+}
+
+.hero-row .agent-card {
+  flex-shrink: 0;
+}
+
+.hero-row .mission-hero {
+  flex: 1;
+  min-width: 0;
+}
+
 .mission-hero {
   text-align: center;
   padding: 36px 24px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
 }
 
 .mission-hero h1 {
-  font-size: 2.6rem;
+  font-size: 1.6rem;
   color: var(--accent-yellow);
   text-shadow: 0 2px 8px rgba(0,0,0,0.5);
   margin-bottom: 10px;
@@ -1696,6 +1714,14 @@ small {
 
   h1 { font-size: 1.5rem; }
 
+  .hero-row {
+    flex-direction: column;
+  }
+
+  .hero-row .agent-card {
+    max-width: 100%;
+  }
+
   .mission-hero h1 { font-size: 1.9rem; }
 
   .game-grid {
@@ -1726,5 +1752,165 @@ small {
   .agent-badge {
     min-width: 0;
     flex: 1 1 calc(50% - 5px);
+  }
+}
+
+/* ============================================================
+   AGENT CARD LOGO
+   ============================================================ */
+.agent-card {
+  max-width: 480px;
+  width: 100%;
+  border-radius: 16px;
+  overflow: hidden;
+  background: linear-gradient(135deg, var(--surface-raised) 0%, var(--surface) 100%);
+  border: 1.5px solid rgba(249, 220, 18, 0.25);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  position: relative;
+}
+
+.agent-card__stripe {
+  height: 4px;
+  background: linear-gradient(90deg, #f9dc12, #ed692b);
+}
+
+.agent-card__body {
+  display: flex;
+  gap: 0;
+}
+
+.agent-card__photo {
+  flex-shrink: 0;
+  width: 180px;
+  height: 180px;
+  margin: 16px;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid rgba(249, 220, 18, 0.18);
+  background: var(--surface);
+  position: relative;
+}
+
+.agent-card__photo img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  mix-blend-mode: lighten;
+}
+
+.agent-card__info {
+  flex: 1;
+  padding: 18px 18px 14px 0;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.agent-card__header {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 8px;
+}
+
+.agent-card__op-label {
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  letter-spacing: 0.14em;
+  color: #f9dc12;
+  opacity: 0.7;
+}
+
+.agent-card__op-name {
+  font-family: var(--font-heading);
+  font-size: 2.2rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--text);
+  line-height: 1.1;
+}
+
+.agent-card__divider {
+  height: 1px;
+  background: rgba(249, 220, 18, 0.18);
+  margin-bottom: 10px;
+}
+
+.agent-card__fields {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1;
+}
+
+.agent-card__field {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.agent-card__field-label {
+  font-family: var(--font-mono);
+  font-size: 0.55rem;
+  letter-spacing: 0.12em;
+  color: #ed692b;
+  opacity: 0.6;
+}
+
+.agent-card__field-value {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  letter-spacing: 0.04em;
+  color: var(--text);
+  line-height: 1;
+  height: 0.85rem;
+}
+
+.agent-card__cursor {
+  display: inline-block;
+  width: 2px;
+  height: 0.9em;
+  background: var(--text);
+  margin-left: 1px;
+  vertical-align: middle;
+  animation: cursor-blink 0.7s steps(1) infinite;
+}
+
+@keyframes cursor-blink {
+  0%, 50% { opacity: 1; }
+  51%, 100% { opacity: 0; }
+}
+
+.agent-card__classified {
+  position: absolute;
+  top: 18px;
+  right: -12px;
+  font-family: var(--font-heading);
+  font-size: 1.1rem;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  color: #c8243a;
+  text-transform: uppercase;
+  transform: rotate(12deg);
+  border: 2.5px solid #c8243a;
+  padding: 2px 10px;
+  opacity: 0.75;
+  pointer-events: none;
+}
+
+@media (max-width: 500px) {
+  .agent-card__photo {
+    width: 130px;
+    height: 130px;
+    margin: 12px;
+  }
+
+  .agent-card__op-name {
+    font-size: 1.2rem;
+  }
+
+  .agent-card__field-value {
+    font-size: 0.75rem;
   }
 }

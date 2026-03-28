@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { createLobby, getLobby, joinLobby, listGames, listLobbies } from "../lib/api";
 import { useI18n } from "../lib/i18n";
 import { clearStoredPlayerId, getStoredLobbyIds, getStoredPlayerId, setStoredPlayerId } from "../lib/session";
+import AgentCard from "../components/common/AgentCard";
 
 function NameModal({ title, submitLabel, onSubmit, onClose, showVisibility, t }) {
   const [name, setName] = useState("");
@@ -177,19 +178,22 @@ export default function LandingPage() {
 
   return (
     <main className="page">
-      <section className="card mission-hero">
-        <h1>{t("quickLobbyGame")}</h1>
-        <p>{t("heroText")}</p>
-        <button
-          className="cta"
-          onClick={() => {
-            setSelectedLobbyId("");
-            setModalMode("create");
-          }}
-        >
-          {t("startNewGame")}
-        </button>
-      </section>
+      <div className="hero-row">
+        <AgentCard />
+        <section className="card mission-hero">
+          <h1>{t("quickLobbyGame")}</h1>
+          <p>{t("heroText")}</p>
+          <button
+            className="cta"
+            onClick={() => {
+              setSelectedLobbyId("");
+              setModalMode("create");
+            }}
+          >
+            {t("startNewGame")}
+          </button>
+        </section>
+      </div>
 
       <section className="card">
         <div className="active-missions-header">

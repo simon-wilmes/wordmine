@@ -227,7 +227,10 @@ function updateLobbySettings(lobbyId, playerId, patch) {
     ["rankBonus2", 0, 2000],
     ["rankBonus3", 0, 2000],
     ["redPenalty", 0, 2000],
-    ["blackPenalty", 0, 5000]
+    ["blackPenalty", 0, 5000],
+    ["greenCards", 1, 23],
+    ["redCards", 0, 24],
+    ["blackCards", 0, 24]
   ];
 
   for (const [field, min, max] of rangedFields) {
@@ -236,6 +239,11 @@ function updateLobbySettings(lobbyId, playerId, patch) {
       return { error: `${field} must be an integer between ${min} and ${max}.` };
     }
     nextConfig[field] = value;
+  }
+
+  const cardSum = nextConfig.greenCards + nextConfig.redCards + nextConfig.blackCards;
+  if (cardSum !== 25) {
+    return { error: `Green + Red + Black cards must equal 25 (currently ${cardSum}).` };
   }
 
   const cluePhase = Number(nextConfig.cluePhaseSeconds);

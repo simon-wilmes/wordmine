@@ -62,12 +62,13 @@ function pickWords(count, language = "en") {
   return shuffle(pool).slice(0, count);
 }
 
-function buildBoard(language = "en") {
-  const words = pickWords(25, language);
-  const indexes = shuffle(Array.from({ length: 25 }, (_, i) => i));
-  const green = indexes.slice(0, 14);
-  const red = indexes.slice(14, 24);
-  const black = indexes[24];
+function buildBoard(language = "en", greenCards = 14, redCards = 10, blackCards = 1) {
+  const totalCards = greenCards + redCards + blackCards;
+  const words = pickWords(totalCards, language);
+  const indexes = shuffle(Array.from({ length: totalCards }, (_, i) => i));
+  const green = indexes.slice(0, greenCards);
+  const red = indexes.slice(greenCards, greenCards + redCards);
+  const black = indexes[greenCards + redCards];
 
   const cards = words.map((word, index) => {
     let role = "red";
@@ -135,7 +136,10 @@ function getDefaultGameConfig() {
     rankBonus3: 15,
     redPenalty: 50,
     blackPenalty: 200,
-    penalizeClueGiverForWrongGuesses: true
+    penalizeClueGiverForWrongGuesses: true,
+    greenCards: 14,
+    redCards: 10,
+    blackCards: 1
   };
 }
 
@@ -168,7 +172,7 @@ function buildGuessersState(guesserIds) {
 function buildBoardsByPlayerId(game) {
   const boards = {};
   for (const player of game.players) {
-    boards[player.id] = buildBoard(game.config?.wordLanguage || "en");
+    boards[player.id] = buildBoard(game.config?.wordLanguage || "en", game.config?.greenCards || 14, game.config?.redCards || 10, game.config?.blackCards || 1);
   }
   return boards;
 }
@@ -176,7 +180,7 @@ function buildBoardsByPlayerId(game) {
 function buildRoundState(game) {
   const clueGiverId = game.clueOrder[game.turnIndex % game.clueOrder.length];
   const boardsByPlayerId = game.config?.simultaneousClue ? buildBoardsByPlayerId(game) : null;
-  const fallbackBoard = buildBoard(game.config?.wordLanguage || "en");
+  const fallbackBoard = buildBoard(game.config?.wordLanguage || "en", game.config?.greenCards || 14, game.config?.redCards || 10, game.config?.blackCards || 1);
   const board = boardsByPlayerId?.[clueGiverId] || fallbackBoard;
   const guesserIds = game.config?.simultaneousClue
     ? game.players.map((p) => p.id)

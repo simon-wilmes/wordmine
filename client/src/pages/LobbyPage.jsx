@@ -40,7 +40,10 @@ export default function LobbyPage() {
       redPenalty: 50,
       blackPenalty: 200,
       penalizeClueGiverForWrongGuesses: true,
-      simultaneousClue: false
+      simultaneousClue: false,
+      greenCards: 14,
+      redCards: 10,
+      blackCards: 1
     }
   });
 
@@ -192,7 +195,10 @@ export default function LobbyPage() {
             penalizeClueGiverForWrongGuesses: Boolean(
               draftSettings.gameConfig?.penalizeClueGiverForWrongGuesses
             ),
-            simultaneousClue: Boolean(draftSettings.gameConfig?.simultaneousClue)
+            simultaneousClue: Boolean(draftSettings.gameConfig?.simultaneousClue),
+            greenCards: Number(draftSettings.gameConfig?.greenCards),
+            redCards: Number(draftSettings.gameConfig?.redCards),
+            blackCards: Number(draftSettings.gameConfig?.blackCards)
           }
         }
       },
@@ -396,6 +402,50 @@ export default function LobbyPage() {
               />
             </label>
           </div>
+        </div>
+
+        {/* Card Distribution */}
+        <div className="settings-section">
+          <p className="settings-section-title">{t("cardDistribution")}</p>
+          <div className="settings-grid">
+            <label>
+              {t("greenCards")}
+              <input
+                type="number" min="1" max="23"
+                value={draftSettings.gameConfig?.greenCards ?? 14}
+                onChange={(e) => updateGameConfigField("greenCards", e.target.value)}
+                disabled={!isHost}
+              />
+            </label>
+            <label>
+              {t("redCards")}
+              <input
+                type="number" min="0" max="24"
+                value={draftSettings.gameConfig?.redCards ?? 10}
+                onChange={(e) => updateGameConfigField("redCards", e.target.value)}
+                disabled={!isHost}
+              />
+            </label>
+            <label>
+              {t("blackCards")}
+              <input
+                type="number" min="0" max="24"
+                value={draftSettings.gameConfig?.blackCards ?? 1}
+                onChange={(e) => updateGameConfigField("blackCards", e.target.value)}
+                disabled={!isHost}
+              />
+            </label>
+          </div>
+          {(() => {
+            const sum = Number(draftSettings.gameConfig?.greenCards || 0)
+              + Number(draftSettings.gameConfig?.redCards || 0)
+              + Number(draftSettings.gameConfig?.blackCards || 0);
+            return sum !== 25 ? (
+              <p className="error" style={{ marginTop: "6px" }}>
+                {t("cardSumError")} ({sum}/25)
+              </p>
+            ) : null;
+          })()}
         </div>
 
         {/* Timing */}
