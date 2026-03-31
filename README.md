@@ -1,6 +1,6 @@
 # Codename Competition aka Wordmine
 
-Realtime multiplayer Codenames-inspired party game with private/public lobbies, invite links, host-configurable rules, per-round scoring, in-game chat, and bilingual support (English/German).
+Realtime multiplayer Codenames-inspired party game with private/public lobbies, invite links, host-configurable rules, per-round scoring, in-game chat, and bilingual support (English/German).m
 
 ## What This Project Does
 
@@ -10,7 +10,7 @@ Realtime multiplayer Codenames-inspired party game with private/public lobbies, 
 - Track guesses, penalties, round timing, and cumulative scores
 - In-game chat with rate limiting and automatic round-score breakdowns
 - Round-end board reveal + end-game podium with detailed stats
-- Rematch flow: host creates a new lobby with same settings, other players join with one click
+- Rematch flow: host creates a new lobby with same settings and name, other players see a popup and can join with one click
 - Spectator mode for watching live games
 - Reconnect on page refresh (player identity stored in localStorage per lobby)
 - Bilingual: board word language per lobby (`en`/`de`) + UI language toggle (`en`/`de`)
@@ -91,14 +91,15 @@ Each round uses a 5x5 board:
 
 Flow per round:
 
-1. Clue giver selects a subset of green cards and submits a one-word clue + count
+1. Clue giver selects a subset of green cards and submits a one-word clue + count (Enter key or button)
 2. Guessers single-click to mark cards, double-click to commit a guess
-3. Outcomes:
+3. Each guesser may make at most **clueCount + 1** guesses per round
+4. Outcomes:
    - Green card that was selected by clue giver: **correct** (points)
-   - Green card not selected: **neutral** (no points, no penalty, no stop)
-   - Red card: **penalty**; on second red the guesser is finished for the round
+   - Green card not selected: **neutral** (no points, no penalty, counts toward guess limit)
+   - Red card: **penalty**; guesser is **immediately finished** for the round
    - Black card: **heavy penalty**; guesser finished immediately
-4. Round ends when all targets found, all guessers finished, or timer expires
+5. Round ends when all targets found, all guessers finished (guess limit, red, or black), or timer expires
 5. Reveal phase shows the full board for a configurable pause, then next round
 
 ### Scoring
@@ -142,7 +143,7 @@ In-game chat panel ("Terminal") with:
 
 ## Lobby & Session Flow
 
-1. **Create lobby** (`POST /api/lobbies`) — returns `lobbyId` + `playerId` (host)
+1. **Create lobby** (`POST /api/lobbies`) — body includes `name` (player), `visibility`, and `lobbyName`; returns `lobbyId` + `playerId` (host)
 2. **Join lobby** (`POST /api/lobbies/:id/join`) — returns `playerId` for the new player
 3. **Connect socket** (`join-lobby` event) — joins the Socket.io room, marks player connected
 4. **Start game** (`start-game` event) — host only, requires 2+ players
@@ -160,7 +161,7 @@ Player identity is stored in `localStorage` as a map of `lobbyId -> playerId`, a
 |--------|------|-------------|
 | `GET` | `/api/lobbies` | List public waiting lobbies |
 | `GET` | `/api/games` | List public in-progress games |
-| `POST` | `/api/lobbies` | Create lobby (body: `name`, `visibility`) |
+| `POST` | `/api/lobbies` | Create lobby (body: `name`, `visibility`, `lobbyName`) |
 | `GET` | `/api/lobbies/:id` | Get lobby + game status |
 | `POST` | `/api/lobbies/:id/join` | Join lobby (body: `name`, `viaInvite`) |
 
@@ -173,6 +174,7 @@ Player identity is stored in `localStorage` as a map of `lobbyId -> playerId`, a
 | `join-lobby` | Join socket room (with or without `playerId` for spectating) |
 | `leave-lobby` | Leave and remove player from lobby |
 | `update-settings` | Host updates lobby settings |
+| `update-lobby-name` | Host renames the lobby |
 | `start-game` | Host starts the game |
 | `kick-player` | Host kicks a player |
 | `game:get-state` | Request current game view |
@@ -180,7 +182,7 @@ Player identity is stored in `localStorage` as a map of `lobbyId -> playerId`, a
 | `game:mark-card` | Toggle mark on a card (visual only) |
 | `game:guess-card` | Commit a guess on a card |
 | `game:send-message` | Send chat message |
-| `game:request-rematch` | Host: create rematch lobby; others: join it |
+| `game:request-rematch` | Host: create rematch lobby; others: join it (payload includes `playerColor` so rematch players can keep their color when available) |
 
 **Server -> Client:**
 
@@ -190,6 +192,7 @@ Player identity is stored in `localStorage` as a map of `lobbyId -> playerId`, a
 | `lobby-closed` | Lobby was deleted (host left or kicked) |
 | `game-started` | Game has begun, navigate to game page |
 | `game-state` | Per-player game view (role-filtered) |
+| `game:rematch-closed` | Rematch lobby was closed; hide the join-rematch button |
 | `kicked-from-lobby` | You were kicked by the host |
 
 ## Project Structure

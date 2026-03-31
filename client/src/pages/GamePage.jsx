@@ -28,6 +28,8 @@ export default function GamePage() {
   const [secondsRemaining, setSecondsRemaining] = useState(0);
   const [chatInput, setChatInput] = useState("");
   const [isChatOpen, setIsChatOpen] = useState(true);
+  const [showRematchPopup, setShowRematchPopup] = useState(false);
+  const rematchPopupShownForLobbyId = useRef(null);
 
   const isClueGiver = game?.role === "clue-giver";
   const isClueAll = game?.role === "clue-all";
@@ -60,6 +62,11 @@ export default function GamePage() {
     if (!game?.scores) return [];
     return [...game.scores].sort((a, b) => b.total - a.total);
   }, [game]);
+
+  const myScoreRow = useMemo(
+    () => scoreRows.find((row) => row.playerId === playerId) || null,
+    [scoreRows, playerId]
+  );
 
   const endStatsRows = useMemo(() => {
     if (!game?.playerStats || !game?.scores) return [];
@@ -117,6 +124,9 @@ export default function GamePage() {
             setError(ack?.error || "Could not load game state.");
             return;
           }
+          if (ack.game?.lobbyId && ack.game.lobbyId !== lobbyId) {
+            return;
+          }
           setGame(ack.game);
         });
       });
@@ -124,6 +134,9 @@ export default function GamePage() {
 
     function onGameState(nextGame) {
       if (!mounted) return;
+      if (nextGame?.lobbyId && nextGame.lobbyId !== lobbyId) {
+        return;
+      }
       setGame(nextGame);
       if (nextGame?.phase !== "clue" && nextGame?.phase !== "clue-all") {
         setSelectedCards([]);
@@ -138,6 +151,55 @@ export default function GamePage() {
       socket.off("game-state", onGameState);
     };
   }, [lobbyId, resolvedPlayerId]);
+
+  // Show rematch popup to non-host players when host creates a rematch
+  useEffect(() => {
+    const rematchId = game?.rematchLobbyId || null;
+    const canJoinRematch = Boolean(game?.canJoinRematch);
+    const isNonHostPlayer = Boolean(playerId && game?.hostId !== playerId);
+
+    if (!canJoinRematch) {
+      setShowRematchPopup(false);
+    }
+
+    // Reset one-time popup memory when rematch is cleared.
+    if (!rematchId) {
+      rematchPopupShownForLobbyId.current = null;
+      return;
+    }
+
+    // Show exactly once per rematch lobby, and only for non-host players.
+    if (
+      canJoinRematch
+      && isNonHostPlayer
+      && rematchPopupShownForLobbyId.current !== rematchId
+    ) {
+      setShowRematchPopup(true);
+      rematchPopupShownForLobbyId.current = rematchId;
+    }
+  }, [game?.canJoinRematch, game?.rematchLobbyId, game?.hostId, playerId]);
+
+  useEffect(() => {
+    const socket = getSocket();
+
+    function onRematchClosed() {
+      setShowRematchPopup(false);
+      rematchPopupShownForLobbyId.current = null;
+      setGame((prev) => (
+        prev
+          ? {
+              ...prev,
+              rematchLobbyId: null,
+              rematchHostConnected: false,
+              canJoinRematch: false
+            }
+          : prev
+      ));
+    }
+
+    socket.on("game:rematch-closed", onRematchClosed);
+    return () => socket.off("game:rematch-closed", onRematchClosed);
+  }, []);
 
   // Timer countdown
   useEffect(() => {
@@ -237,7 +299,7 @@ export default function GamePage() {
   function requestRematch() {
     const socket = getSocket();
     setError("");
-    socket.emit("game:request-rematch", { lobbyId, playerId }, (ack) => {
+    socket.emit("game:request-rematch", { lobbyId, playerId, playerColor: myScoreRow?.color || null }, (ack) => {
       if (!ack?.ok) {
         setError(ack?.error || "Failed to create rematch.");
         return;
@@ -303,7 +365,7 @@ export default function GamePage() {
                   <button className="cta" onClick={requestRematch}>
                     {game.rematchLobbyId ? t("goToRematch") : t("rematch")}
                   </button>
-                ) : game.rematchLobbyId ? (
+                ) : game.canJoinRematch ? (
                   <button className="cta" onClick={requestRematch}>
                     {t("joinRematch")}
                   </button>
@@ -344,6 +406,23 @@ export default function GamePage() {
             </div>
           )}
         </section>
+
+        {showRematchPopup && (
+          <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label={t("rematchPopupTitle")}>
+            <div className="modal">
+              <h3>{t("rematchPopupTitle")}</h3>
+              <p style={{ color: "var(--text-muted)", fontSize: "0.88rem" }}>{t("rematchPopupText")}</p>
+              <div className="button-row">
+                <button className="cta" onClick={() => { setShowRematchPopup(false); requestRematch(); }}>
+                  {t("joinRematch")}
+                </button>
+                <button className="ghost" onClick={() => setShowRematchPopup(false)}>
+                  {t("dismiss")}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </main>
     );
   }
@@ -416,6 +495,9 @@ export default function GamePage() {
             const mineWrongRed = game.myGuesserState?.guessedWrongRed?.includes(card.index);
             const mineWrongBlack = game.myGuesserState?.guessedWrongBlack?.includes(card.index);
             const mineNeutral = game.myGuesserState?.guessedNeutral?.includes(card.index);
+            const mineGuessed = Boolean(
+              mineCorrect || mineWrong || mineWrongRed || mineWrongBlack || mineNeutral
+            );
             const alreadyGuessed = Boolean(mineCorrect || mineWrong || mineNeutral);
 
             return (
@@ -423,7 +505,8 @@ export default function GamePage() {
                 key={card.index}
                 className={[
                   cardClass(card, game, selectedForClue, mineCorrect, mineNeutral, mineWrongRed, mineWrongBlack),
-                  mineMarked ? "mine-mark" : "",
+                  game.phase === "guess" && mineMarked && !mineGuessed ? "mine-mark" : "",
+                  game.phase === "guess" && mineGuessed ? "mine-guessed" : "",
                   mineCorrect ? "mine-correct" : "",
                   mineWrong ? "mine-wrong" : "",
                 ].filter(Boolean).join(" ")}
@@ -467,6 +550,7 @@ export default function GamePage() {
                 <input
                   value={clue}
                   onChange={(e) => setClue(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") submitClue(); }}
                   placeholder={t("oneClue")}
                 />
               </label>
@@ -491,6 +575,7 @@ export default function GamePage() {
               <input
                 value={clue}
                 onChange={(e) => setClue(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") submitClue(); }}
                 placeholder={t("oneClue")}
               />
             </label>
@@ -555,24 +640,21 @@ export default function GamePage() {
               ? ` ${t("markerHint")}` : ""}
           </p>
           <ul className="operative-list">
-            {game.guessersProgress.map((g) => (
-              <li key={g.playerId} className={`operative-item${g.finished ? " is-finished" : ""}`}>
-                <div className="operative-name-row">
-                  <span className="operative-name" style={g.color ? { color: g.color } : undefined}>{g.name}</span>
-                  <span className={`operative-status ${g.finished ? "finished" : "active"}`}>
+            {game.guessersProgress.map((g) => {
+              let barClass = "operative-bar";
+              if (g.blackCount > 0) barClass += " bar-black";
+              else if (g.redCount > 0) barClass += " bar-red";
+              else if (g.finished && game.clueCount > 0 && g.correctCount >= game.clueCount) barClass += " bar-green";
+              else if (g.finished) barClass += " bar-exhausted";
+              return (
+                <li key={g.playerId} className={barClass}>
+                  <span className="operative-bar-name">{g.name}</span>
+                  <span className="operative-bar-status">
                     {g.finished ? t("finished") : t("active")}
                   </span>
-                </div>
-                <StatsChips
-                  stats={{
-                    correctGreen: g.correctCount,
-                    neutralGreen: g.neutralCount,
-                    red: g.redCount,
-                    black: g.blackCount
-                  }}
-                />
-              </li>
-            ))}
+                </li>
+              );
+            })}
           </ul>
         </div>
 

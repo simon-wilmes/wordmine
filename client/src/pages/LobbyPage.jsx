@@ -24,6 +24,7 @@ export default function LobbyPage() {
   const [message, setMessage] = useState("");
   const [copiedInvite, setCopiedInvite] = useState(false);
   const [showUnsavedStartWarning, setShowUnsavedStartWarning] = useState(false);
+  const [draftLobbyName, setDraftLobbyName] = useState("");
   const [draftSettings, setDraftSettings] = useState({
     visibility: "public",
     gameConfig: {
@@ -76,6 +77,7 @@ export default function LobbyPage() {
         if (!mounted) return;
         setLobby(data.lobby);
         setDraftSettings(data.lobby.settings);
+        setDraftLobbyName(data.lobby.name || "");
         if (data.lobby?.status === "started") {
           navigate(`/game/${data.lobby.id}`);
           return;
@@ -100,9 +102,13 @@ export default function LobbyPage() {
     const socket = getSocket();
 
     function onLobbyUpdated(nextLobby) {
+      if (nextLobby?.id && nextLobby.id !== lobbyId) {
+        return;
+      }
       logDebug("received lobby-updated", nextLobby);
       setLobby(nextLobby);
       setDraftSettings(nextLobby.settings);
+      setDraftLobbyName(nextLobby.name || "");
       if (nextLobby?.status === "started") {
         navigate(`/game/${nextLobby.id}`);
       }
@@ -115,6 +121,9 @@ export default function LobbyPage() {
     }
 
     function onGameStarted(payload) {
+      if (payload?.lobbyId && payload.lobbyId !== lobbyId) {
+        return;
+      }
       logDebug("received game-started", payload);
       navigate(`/game/${payload.lobbyId}`);
     }
@@ -136,6 +145,7 @@ export default function LobbyPage() {
         return;
       }
       setLobby(ack.lobby);
+      setDraftLobbyName(ack.lobby.name || "");
     });
 
     return () => {
@@ -284,7 +294,29 @@ export default function LobbyPage() {
       <section className="card">
         <div className="section-head">
           <div>
-            <h1>{t("lobby")} {lobby.id}</h1>
+            {isHost ? (
+              <div className="lobby-name-edit-row">
+                <input
+                  className="lobby-name-input"
+                  value={draftLobbyName}
+                  onChange={(e) => setDraftLobbyName(e.target.value)}
+                  onBlur={() => {
+                    const trimmed = draftLobbyName.trim();
+                    if (trimmed.length >= 2 && trimmed !== (lobby.name || "")) {
+                      getSocket().emit("update-lobby-name", { lobbyId, playerId, name: trimmed }, (ack) => {
+                        if (!ack?.ok) setError(ack?.error || "Could not rename lobby.");
+                      });
+                    }
+                  }}
+                  onKeyDown={(e) => { if (e.key === "Enter") e.target.blur(); }}
+                  placeholder={t("enterLobbyName")}
+                  minLength={2}
+                  maxLength={30}
+                />
+              </div>
+            ) : (
+              <h1>{lobby.name || `${t("lobby")} ${lobby.id}`}</h1>
+            )}
             <p style={{ color: "var(--text-muted)", fontSize: "0.82rem", margin: 0 }}>
               {t("status")}: <strong style={{ color: "var(--text)" }}>{lobby.status}</strong>
             </p>
@@ -600,15 +632,52 @@ export default function LobbyPage() {
             <p style={{ color: "var(--text-muted)", fontSize: "0.88rem" }}>{t("unsavedSettingsText")}</p>
             <div className="button-row">
               <button
-                className="ghost"
+                className="cta"
                 onClick={() => {
                   setShowUnsavedStartWarning(false);
-                  saveSettings();
+                  const socket = getSocket();
+                  socket.emit(
+                    "update-settings",
+                    {
+                      lobbyId,
+                      playerId,
+                      settings: {
+                        visibility: draftSettings.visibility,
+                        gameConfig: {
+                          wordLanguage: String(draftSettings.gameConfig?.wordLanguage || "en"),
+                          cycles: Number(draftSettings.gameConfig?.cycles),
+                          cluePhaseSeconds: Number(draftSettings.gameConfig?.cluePhaseSeconds),
+                          guessPhaseSeconds: Number(draftSettings.gameConfig?.guessPhaseSeconds),
+                          betweenRoundsSeconds: Number(draftSettings.gameConfig?.betweenRoundsSeconds),
+                          clueCardValue: Number(draftSettings.gameConfig?.clueCardValue),
+                          guesserCardPool: Number(draftSettings.gameConfig?.guesserCardPool),
+                          rankBonus1: Number(draftSettings.gameConfig?.rankBonus1),
+                          rankBonus2: Number(draftSettings.gameConfig?.rankBonus2),
+                          rankBonus3: Number(draftSettings.gameConfig?.rankBonus3),
+                          redPenalty: Number(draftSettings.gameConfig?.redPenalty),
+                          blackPenalty: Number(draftSettings.gameConfig?.blackPenalty),
+                          penalizeClueGiverForWrongGuesses: Boolean(draftSettings.gameConfig?.penalizeClueGiverForWrongGuesses),
+                          simultaneousClue: Boolean(draftSettings.gameConfig?.simultaneousClue),
+                          greenCards: Number(draftSettings.gameConfig?.greenCards),
+                          redCards: Number(draftSettings.gameConfig?.redCards),
+                          blackCards: Number(draftSettings.gameConfig?.blackCards)
+                        }
+                      }
+                    },
+                    (ack) => {
+                      if (!ack?.ok) {
+                        setError(ack?.error || "Could not save settings.");
+                        return;
+                      }
+                      startGameNow();
+                    }
+                  );
                 }}
               >
-                {t("saveFirst")}
+                {t("saveFirstAndStart")}
               </button>
               <button
+                className="ghost"
                 onClick={() => {
                   setShowUnsavedStartWarning(false);
                   startGameNow();

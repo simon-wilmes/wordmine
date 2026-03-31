@@ -5,8 +5,9 @@ import { useI18n } from "../lib/i18n";
 import { clearStoredPlayerId, getStoredLobbyIds, getStoredPlayerId, setStoredPlayerId } from "../lib/session";
 import AgentCard from "../components/common/AgentCard";
 
-function NameModal({ title, submitLabel, onSubmit, onClose, showVisibility, t }) {
+function NameModal({ title, submitLabel, onSubmit, onClose, showVisibility, showLobbyName, t }) {
   const [name, setName] = useState("");
+  const [lobbyName, setLobbyName] = useState("");
   const [visibility, setVisibility] = useState("public");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -16,7 +17,7 @@ function NameModal({ title, submitLabel, onSubmit, onClose, showVisibility, t })
     setError("");
     setLoading(true);
     try {
-      await onSubmit({ name: name.trim(), visibility });
+      await onSubmit({ name: name.trim(), visibility, lobbyName: lobbyName.trim() || null });
     } catch (err) {
       setError(err.message);
     } finally {
@@ -29,7 +30,20 @@ function NameModal({ title, submitLabel, onSubmit, onClose, showVisibility, t })
       <div className="modal">
         <h2>{title}</h2>
         <form onSubmit={handleSubmit}>
-          <label>
+          {showLobbyName && (
+            <label>
+              {t("lobbyName")}
+              <input
+                value={lobbyName}
+                onChange={(e) => setLobbyName(e.target.value)}
+                placeholder={t("enterLobbyName")}
+                minLength={2}
+                maxLength={30}
+                required
+              />
+            </label>
+          )}
+          <label style={showLobbyName ? { marginTop: "14px" } : undefined}>
             {t("yourName")}
             <input
               value={name}
@@ -164,8 +178,8 @@ export default function LandingPage() {
     setModalMode("join");
   }, [search, setSearch, navigate]);
 
-  async function handleCreate({ name, visibility }) {
-    const data = await createLobby(name, visibility);
+  async function handleCreate({ name, visibility, lobbyName }) {
+    const data = await createLobby(name, visibility, lobbyName);
     setStoredPlayerId(data.lobby.id, data.playerId);
     navigate(`/lobby/${data.lobby.id}`);
   }
@@ -212,7 +226,7 @@ export default function LandingPage() {
           {lobbies.map((lobby) => (
             <li key={lobby.id} className="lobby-item">
               <div>
-                <div className="lobby-mission-code">Mission {lobby.id}</div>
+                <div className="lobby-mission-code">{lobby.name || `Mission ${lobby.id}`}</div>
                 <p className="lobby-meta">
                   {lobby.players} {t("players")} &nbsp;·&nbsp;
                   <span className={`lobby-status-badge ${lobby.visibility}`}>
@@ -256,7 +270,7 @@ export default function LandingPage() {
           {games.filter((game) => !getStoredPlayerId(game.id)).map((game) => (
             <li key={game.id} className="lobby-item">
               <div>
-                <div className="lobby-mission-code">Mission {game.id}</div>
+                <div className="lobby-mission-code">{game.name || `Mission ${game.id}`}</div>
                 <p className="lobby-meta">
                   {game.players} {t("players")}
                 </p>
@@ -285,7 +299,7 @@ export default function LandingPage() {
           {myGames.map((game) => (
             <li key={game.id} className="lobby-item">
               <div>
-                <div className="lobby-mission-code">Mission {game.id}</div>
+                <div className="lobby-mission-code">{game.name || `Mission ${game.id}`}</div>
                 <p className="lobby-meta">
                   {game.players.length} {t("players")}
                   {game.gameStatus === "finished" && (
@@ -297,7 +311,7 @@ export default function LandingPage() {
                 </p>
               </div>
               <button onClick={() => navigate(`/game/${game.id}`)}>
-                {t("rejoinGame")}
+                {game.gameStatus === "finished" ? t("viewResults") : t("rejoinGame")}
               </button>
             </li>
           ))}
@@ -310,6 +324,7 @@ export default function LandingPage() {
           submitLabel={t("continue")}
           onSubmit={handleCreate}
           showVisibility
+          showLobbyName
           t={t}
           onClose={() => setModalMode(null)}
         />

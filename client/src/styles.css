@@ -76,6 +76,28 @@ p { margin-top: 0; }
   margin-bottom: 18px;
 }
 
+.lobby-name-edit-row {
+  margin-bottom: 4px;
+}
+
+.lobby-name-input {
+  font-family: var(--font-heading);
+  font-size: 1.6rem;
+  font-weight: 700;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  padding: 4px 8px;
+  width: 100%;
+  max-width: 360px;
+}
+
+.lobby-name-input:focus {
+  border-color: var(--border-strong);
+  outline: none;
+}
+
 /* ============================================================
    BUTTONS
    ============================================================ */
@@ -1081,8 +1103,23 @@ small {
 
 /* My marks */
 .game-card.mine-mark {
-  outline: 2px dashed rgba(249, 220, 18, 0.55);
+  outline: 2px solid rgba(249, 220, 18, 0.6);
   outline-offset: 2px;
+}
+
+/* My guessed cards in guess phase get a double outline ring */
+.game-card.mine-guessed {
+  outline: 2px solid rgba(88, 196, 255, 0.95);
+  outline-offset: 2px;
+}
+
+.game-card.mine-guessed::before {
+  content: "";
+  position: absolute;
+  inset: -7px;
+  border: 2px solid rgba(88, 196, 255, 0.55);
+  border-radius: 14px;
+  pointer-events: none;
 }
 
 .game-card.mine-correct {
@@ -1111,6 +1148,7 @@ small {
   font-size: 0.58rem;
   line-height: 1.3;
   font-weight: 700;
+  position: relative;
   background: rgba(255, 255, 255, 0.18);
   color: rgba(240, 232, 208, 0.9);
   border: 1px solid rgba(255, 255, 255, 0.15);
@@ -1121,6 +1159,7 @@ small {
   background: rgba(249, 220, 18, 0.15);
   color: var(--accent-yellow);
   border-color: rgba(249, 220, 18, 0.3);
+  outline: 1px solid currentColor;
 }
 
 .card-marker-pill.correct,
@@ -1128,18 +1167,35 @@ small {
   background: rgba(19, 184, 118, 0.25);
   color: #a0f0cc;
   border-color: rgba(19, 184, 118, 0.35);
+  outline: 1px solid currentColor;
 }
 
 .card-marker-pill.wrong-red {
   background: rgba(141, 23, 58, 0.35);
   color: #ffaaaa;
   border-color: rgba(141, 23, 58, 0.5);
+  outline: 1px solid currentColor;
 }
 
 .card-marker-pill.wrong-black {
   background: rgba(0, 0, 0, 0.4);
   color: rgba(240, 232, 208, 0.7);
   border-color: rgba(141, 23, 58, 0.3);
+  outline: 1px solid currentColor;
+}
+
+/* Guessed markers always show a clear double ring using player color (currentColor). */
+.card-marker-pill.correct::after,
+.card-marker-pill.neutral::after,
+.card-marker-pill.wrong-red::after,
+.card-marker-pill.wrong-black::after {
+  content: "";
+  position: absolute;
+  inset: -4px;
+  border: 2px solid currentColor;
+  border-radius: 6px;
+  opacity: 0.9;
+  pointer-events: none;
 }
 
 /* Override pill colors on light-background unknown cards */
@@ -1282,49 +1338,49 @@ small {
   gap: 8px;
 }
 
-.operative-item {
+.operative-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   background: var(--surface-raised-glass);
   border: 1px solid var(--border);
   border-radius: 10px;
   padding: 10px 12px;
+  color: var(--text);
+  transition: background 0.2s, color 0.2s;
 }
 
-.operative-item.is-finished {
-  opacity: 0.5;
+.operative-bar.bar-red {
+  background: var(--card-enemy);
+  color: var(--text);
 }
 
-.operative-name-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 6px;
+.operative-bar.bar-black {
+  background: var(--card-assassin);
+  color: var(--text);
 }
 
-.operative-name {
+.operative-bar.bar-green {
+  background: var(--success);
+  color: var(--text-dark);
+}
+
+.operative-bar.bar-exhausted {
+  background: var(--operative-exhausted);
+  color: var(--text);
+}
+
+.operative-bar-name {
   font-weight: 600;
   font-size: 0.85rem;
 }
 
-.operative-status {
+.operative-bar-status {
   font-family: var(--font-mono);
   font-size: 0.6rem;
   font-weight: 700;
   letter-spacing: 0.1em;
   text-transform: uppercase;
-  padding: 2px 7px;
-  border-radius: 999px;
-}
-
-.operative-status.active {
-  color: var(--success);
-  background: rgba(61, 196, 106, 0.12);
-  border: 1px solid rgba(61, 196, 106, 0.28);
-}
-
-.operative-status.finished {
-  color: var(--text-muted);
-  background: rgba(240, 232, 208, 0.06);
-  border: 1px solid rgba(240, 232, 208, 0.1);
 }
 
 .my-status-box {

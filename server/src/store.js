@@ -14,8 +14,11 @@ const PLAYER_COLORS = [
   "#c8b632", // gold
 ];
 
-function pickColor(existingPlayers) {
+function pickColor(existingPlayers, preferredColor = null) {
   const used = new Set(existingPlayers.map((p) => p.color));
+  if (preferredColor && !used.has(preferredColor)) {
+    return preferredColor;
+  }
   const available = PLAYER_COLORS.filter((c) => !used.has(c));
   const pool = available.length > 0 ? available : PLAYER_COLORS;
   return pool[Math.floor(Math.random() * pool.length)];
@@ -47,6 +50,7 @@ function validateName(name) {
 function serializeLobby(lobby) {
   return {
     id: lobby.id,
+    name: lobby.name || null,
     hostId: lobby.hostId,
     status: lobby.status,
     createdAt: lobby.createdAt,
@@ -69,13 +73,30 @@ function getDefaultLobbySettings(visibility) {
   };
 }
 
-function createLobby(hostName, visibility = "public", overrideSettings = null) {
+function validateLobbyName(name) {
+  const trimmed = String(name || "").trim();
+  if (!trimmed) {
+    return "Lobby name is required.";
+  }
+  if (trimmed.length < 2 || trimmed.length > 30) {
+    return "Lobby name must be 2-30 characters.";
+  }
+  return null;
+}
+
+function createLobby(hostName, visibility = "public", overrideSettings = null, lobbyName = null, preferredColor = null) {
   const nameError = validateName(hostName);
   if (nameError) {
     return { error: nameError };
   }
   if (!["public", "private"].includes(visibility)) {
     return { error: "visibility must be public or private." };
+  }
+  if (lobbyName !== null) {
+    const lobbyNameError = validateLobbyName(lobbyName);
+    if (lobbyNameError) {
+      return { error: lobbyNameError };
+    }
   }
 
   const lobbyId = makeId();
@@ -84,6 +105,7 @@ function createLobby(hostName, visibility = "public", overrideSettings = null) {
 
   const lobby = {
     id: lobbyId,
+    name: lobbyName ? String(lobbyName).trim() : null,
     hostId,
     status: "waiting",
     createdAt,
@@ -97,7 +119,7 @@ function createLobby(hostName, visibility = "public", overrideSettings = null) {
         name: normalizeName(hostName),
         isHost: true,
         connected: false,
-        color: pickColor([])
+        color: pickColor([], preferredColor)
       }
     ]
   };
@@ -106,11 +128,29 @@ function createLobby(hostName, visibility = "public", overrideSettings = null) {
   return { lobby: serializeLobby(lobby), playerId: hostId };
 }
 
+function updateLobbyName(lobbyId, playerId, newName) {
+  const lobby = getLobby(lobbyId);
+  if (!lobby) {
+    return { error: "Lobby not found." };
+  }
+  if (lobby.hostId !== playerId) {
+    return { error: "Only the host can rename the lobby." };
+  }
+  const lobbyNameError = validateLobbyName(newName);
+  if (lobbyNameError) {
+    return { error: lobbyNameError };
+  }
+  lobby.name = String(newName).trim();
+  lobby.updatedAt = nowIso();
+  return { lobby: serializeLobby(lobby) };
+}
+
 function listPublicLobbies() {
   return Array.from(lobbies.values())
     .filter((lobby) => lobby.status === "waiting")
     .map((lobby) => ({
       id: lobby.id,
+      name: lobby.name || null,
       players: lobby.players.length,
       visibility: lobby.settings.visibility,
       createdAt: lobby.createdAt
@@ -122,6 +162,7 @@ function listStartedPublicLobbies() {
     .filter((lobby) => lobby.status === "started" && lobby.settings.visibility === "public")
     .map((lobby) => ({
       id: lobby.id,
+      name: lobby.name || null,
       players: lobby.players.length,
       visibility: lobby.settings.visibility,
       createdAt: lobby.createdAt,
@@ -139,7 +180,7 @@ function getSerializedLobby(lobbyId) {
 }
 
 function joinLobby(lobbyId, playerName, options = {}) {
-  const { viaInvite = false } = options;
+  const { viaInvite = false, preferredColor = null } = options;
   const nameError = validateName(playerName);
   if (nameError) {
     return { error: nameError };
@@ -171,7 +212,7 @@ function joinLobby(lobbyId, playerName, options = {}) {
     name: cleanName,
     isHost: false,
     connected: false,
-    color: pickColor(lobby.players)
+    color: pickColor(lobby.players, preferredColor)
   });
   lobby.updatedAt = nowIso();
 
@@ -292,24 +333,28 @@ function startGame(lobbyId, playerId) {
 function removePlayer(lobbyId, playerId) {
   const lobby = getLobby(lobbyId);
   if (!lobby) {
-    return { removedLobby: false, lobby: null, removedPlayer: null };
+    return { removedLobby: false, lobby: null, removedPlayer: null, removedLobbyDetails: null };
   }
 
   const idx = lobby.players.findIndex((p) => p.id === playerId);
   if (idx < 0) {
-    return { removedLobby: false, lobby: serializeLobby(lobby), removedPlayer: null };
+    return { removedLobby: false, lobby: serializeLobby(lobby), removedPlayer: null, removedLobbyDetails: null };
   }
 
   const [removedPlayer] = lobby.players.splice(idx, 1);
   lobby.updatedAt = nowIso();
+  const removedLobbyDetails = {
+    id: lobby.id,
+    rematchSourceLobbyId: lobby.rematchSourceLobbyId || null
+  };
 
   const removedHost = removedPlayer.id === lobby.hostId;
   if (removedHost || lobby.players.length === 0) {
     lobbies.delete(lobbyId);
-    return { removedLobby: true, lobby: null, removedPlayer };
+    return { removedLobby: true, lobby: null, removedPlayer, removedLobbyDetails };
   }
 
-  return { removedLobby: false, lobby: serializeLobby(lobby), removedPlayer };
+  return { removedLobby: false, lobby: serializeLobby(lobby), removedPlayer, removedLobbyDetails: null };
 }
 
 function kickPlayer(lobbyId, hostId, targetPlayerId) {
@@ -344,5 +389,6 @@ module.exports = {
   kickPlayer,
   removePlayer,
   startGame,
+  updateLobbyName,
   updateLobbySettings
 };

@@ -24,10 +24,10 @@ export function listGames() {
   return request("/api/games");
 }
 
-export function createLobby(name, visibility) {
+export function createLobby(name, visibility, lobbyName = null) {
   return request("/api/lobbies", {
     method: "POST",
-    body: JSON.stringify({ name, visibility })
+    body: JSON.stringify({ name, visibility, lobbyName })
   });
 }
 

@@ -14,6 +14,7 @@ const {
   kickPlayer,
   removePlayer, // used by leave-lobby only
   startGame,
+  updateLobbyName,
   updateLobbySettings
 } = require("./store");
 const {
@@ -74,7 +75,7 @@ gameRouter.get("/api/games", (_req, res) => {
 });
 
 gameRouter.post("/api/lobbies", (req, res) => {
-  const result = createLobby(req.body?.name, req.body?.visibility || "public");
+  const result = createLobby(req.body?.name, req.body?.visibility || "public", null, req.body?.lobbyName || null);
   if (result.error) {
     logDebug("create lobby failed", { error: result.error, body: req.body || {} });
     return res.status(400).json({ error: result.error });
@@ -130,8 +131,58 @@ async function emitGameStateToLobby(lobbyId) {
   for (const roomSocket of sockets) {
     const playerId = roomSocket.data.playerId;
     const view = getGameViewForPlayer(game, playerId);
-    roomSocket.emit("game-state", view);
+    const viewWithRematch = addRematchMetaToView(game, playerId, view);
+    roomSocket.emit("game-state", viewWithRematch);
   }
+}
+
+function getRematchHostConnected(game) {
+  if (!game?.rematchLobbyId) return false;
+  const rematchLobby = getLobby(game.rematchLobbyId);
+  if (!rematchLobby?.hostId) return false;
+  const rematchHost = rematchLobby.players.find((p) => p.id === rematchLobby.hostId);
+  return Boolean(rematchHost?.connected);
+}
+
+function addRematchMetaToView(game, playerId, view) {
+  if (!view) return view;
+
+  const myRematchJoined = Boolean(playerId && game.rematchJoinedByPlayerId?.[playerId]);
+  const rematchHostConnected = getRematchHostConnected(game);
+  const canJoinRematch = Boolean(
+    game.rematchLobbyId
+    && playerId
+    && !myRematchJoined
+    && rematchHostConnected
+  );
+
+  return {
+    ...view,
+    lobbyId: game.lobbyId,
+    myRematchJoined,
+    rematchHostConnected,
+    canJoinRematch
+  };
+}
+
+async function clearRematchIfNeeded(removedLobbyDetails) {
+  const rematchSourceLobbyId = removedLobbyDetails?.rematchSourceLobbyId;
+  const rematchLobbyId = removedLobbyDetails?.id;
+  if (!rematchSourceLobbyId || !rematchLobbyId) {
+    return;
+  }
+
+  const sourceGame = getGame(rematchSourceLobbyId);
+  if (!sourceGame || sourceGame.rematchLobbyId !== rematchLobbyId) {
+    return;
+  }
+
+  sourceGame.rematchLobbyId = null;
+  io.to(rematchSourceLobbyId).emit("game:rematch-closed", {
+    lobbyId: rematchSourceLobbyId,
+    rematchLobbyId
+  });
+  await emitGameStateToLobby(rematchSourceLobbyId);
 }
 
 function scheduleGuessTimer(lobbyId) {
@@ -250,9 +301,25 @@ function scheduleRoundEndTimer(lobbyId) {
 
 io.on("connection", (socket) => {
   logDebug("socket connected", { socketId: socket.id });
-  socket.on("join-lobby", (payload, ack) => {
+  socket.on("join-lobby", async (payload, ack) => {
     const lobbyId = payload?.lobbyId;
     const playerId = payload?.playerId;
+
+    const previousLobbyId = socket.data.lobbyId;
+    const previousPlayerId = socket.data.playerId;
+    if (previousLobbyId && previousLobbyId !== lobbyId) {
+      socket.leave(previousLobbyId);
+      if (previousPlayerId) {
+        const previousLobbyUpdated = markPlayerConnected(previousLobbyId, previousPlayerId, false);
+        if (previousLobbyUpdated) {
+          io.to(previousLobbyId).emit("lobby-updated", previousLobbyUpdated);
+        }
+      }
+      const previousLobby = getLobby(previousLobbyId);
+      if (previousLobby?.rematchSourceLobbyId) {
+        await emitGameStateToLobby(previousLobby.rematchSourceLobbyId);
+      }
+    }
 
     const lobby = getLobby(lobbyId);
     if (!lobby) {
@@ -288,6 +355,9 @@ io.on("connection", (socket) => {
     const updated = markPlayerConnected(lobbyId, playerId, true);
     logDebug("join-lobby success", { socketId: socket.id, lobbyId, playerId });
     io.to(lobbyId).emit("lobby-updated", updated);
+    if (lobby.rematchSourceLobbyId) {
+      await emitGameStateToLobby(lobby.rematchSourceLobbyId);
+    }
     if (ack) ack({ ok: true, lobby: updated });
   });
 
@@ -303,6 +373,22 @@ io.on("connection", (socket) => {
     }
 
     logDebug("update-settings success", { socketId: socket.id, lobbyId, playerId, settings: payload?.settings || {} });
+    io.to(lobbyId).emit("lobby-updated", result.lobby);
+    if (ack) ack({ ok: true, lobby: result.lobby });
+  });
+
+  socket.on("update-lobby-name", (payload, ack) => {
+    const lobbyId = payload?.lobbyId || socket.data.lobbyId;
+    const playerId = payload?.playerId || socket.data.playerId;
+    const result = updateLobbyName(lobbyId, playerId, payload?.name);
+
+    if (result.error) {
+      logDebug("update-lobby-name failed", { socketId: socket.id, lobbyId, playerId, error: result.error });
+      if (ack) ack({ ok: false, error: result.error });
+      return;
+    }
+
+    logDebug("update-lobby-name success", { socketId: socket.id, lobbyId, playerId, name: payload?.name });
     io.to(lobbyId).emit("lobby-updated", result.lobby);
     if (ack) ack({ ok: true, lobby: result.lobby });
   });
@@ -342,7 +428,8 @@ io.on("connection", (socket) => {
     }
 
     const view = getGameViewForPlayer(game, playerId);
-    if (ack) ack({ ok: true, game: view });
+    const viewWithRematch = addRematchMetaToView(game, playerId, view);
+    if (ack) ack({ ok: true, game: viewWithRematch });
   });
 
   socket.on("game:submit-clue", async (payload, ack) => {
@@ -462,6 +549,7 @@ io.on("connection", (socket) => {
   socket.on("game:request-rematch", async (payload, ack) => {
     const lobbyId = payload?.lobbyId || socket.data.lobbyId;
     const playerId = payload?.playerId || socket.data.playerId;
+    const playerColor = payload?.playerColor || null;
     const game = getGame(lobbyId);
 
     if (!game) {
@@ -491,7 +579,13 @@ io.on("connection", (socket) => {
       // Host creates rematch lobby
       if (game.rematchLobbyId) {
         // Already created — just return it
-        if (ack) ack({ ok: true, rematchLobbyId: game.rematchLobbyId, newPlayerId: null });
+        if (ack) {
+          ack({
+            ok: true,
+            rematchLobbyId: game.rematchLobbyId,
+            newPlayerId: game.rematchJoinedByPlayerId?.[playerId] || null
+          });
+        }
         return;
       }
 
@@ -499,13 +593,18 @@ io.on("connection", (socket) => {
         visibility: "private",
         gameConfig: { ...game.config }
       };
-      const result = createLobby(player.name, "private", clonedSettings);
+      const result = createLobby(player.name, "private", clonedSettings, lobby.name || null, playerColor || player.color || null);
       if (result.error) {
         if (ack) ack({ ok: false, error: result.error });
         return;
       }
 
+      const rematchLobby = getLobby(result.lobby.id);
+      if (rematchLobby) {
+        rematchLobby.rematchSourceLobbyId = lobbyId;
+      }
       game.rematchLobbyId = result.lobby.id;
+      game.rematchJoinedByPlayerId[playerId] = result.playerId;
       logDebug("rematch lobby created", { oldLobbyId: lobbyId, newLobbyId: result.lobby.id });
 
       // Broadcast to all players so they see the rematch button
@@ -519,16 +618,36 @@ io.on("connection", (socket) => {
         return;
       }
 
-      const joinResult = joinLobby(game.rematchLobbyId, player.name, { viaInvite: true });
+      const alreadyJoinedPlayerId = game.rematchJoinedByPlayerId?.[playerId];
+      if (alreadyJoinedPlayerId) {
+        if (ack) {
+          ack({
+            ok: true,
+            rematchLobbyId: game.rematchLobbyId,
+            newPlayerId: alreadyJoinedPlayerId
+          });
+        }
+        return;
+      }
+
+      if (!getRematchHostConnected(game)) {
+        if (ack) ack({ ok: false, error: "Host is not currently in the rematch lobby." });
+        return;
+      }
+
+      const joinResult = joinLobby(game.rematchLobbyId, player.name, { viaInvite: true, preferredColor: playerColor || player.color || null });
       if (joinResult.error) {
         if (ack) ack({ ok: false, error: joinResult.error });
         return;
       }
 
+      game.rematchJoinedByPlayerId[playerId] = joinResult.playerId;
+
       logDebug("player joined rematch", { player: player.name, newLobbyId: game.rematchLobbyId });
 
       // Notify the rematch lobby about the new player
       io.to(game.rematchLobbyId).emit("lobby-updated", joinResult.lobby);
+      await emitGameStateToLobby(lobbyId);
 
       if (ack) ack({ ok: true, rematchLobbyId: game.rematchLobbyId, newPlayerId: joinResult.playerId });
     }
@@ -558,14 +677,19 @@ io.on("connection", (socket) => {
     if (result.removedLobby) {
       stopGame(lobbyId);
       io.to(lobbyId).emit("lobby-closed");
+      await clearRematchIfNeeded(result.removedLobbyDetails);
     } else if (result.lobby) {
       io.to(lobbyId).emit("lobby-updated", result.lobby);
+    }
+
+    if (result.removedLobbyDetails?.rematchSourceLobbyId) {
+      await emitGameStateToLobby(result.removedLobbyDetails.rematchSourceLobbyId);
     }
 
     if (ack) ack({ ok: true });
   });
 
-  socket.on("leave-lobby", (payload, ack) => {
+  socket.on("leave-lobby", async (payload, ack) => {
     const lobbyId = payload?.lobbyId || socket.data.lobbyId;
     const playerId = payload?.playerId || socket.data.playerId;
 
@@ -589,14 +713,19 @@ io.on("connection", (socket) => {
     if (result.removedLobby) {
       stopGame(lobbyId);
       io.to(lobbyId).emit("lobby-closed");
+      await clearRematchIfNeeded(result.removedLobbyDetails);
     } else if (result.lobby) {
       io.to(lobbyId).emit("lobby-updated", result.lobby);
+    }
+
+    if (result.removedLobbyDetails?.rematchSourceLobbyId) {
+      await emitGameStateToLobby(result.removedLobbyDetails.rematchSourceLobbyId);
     }
 
     if (ack) ack({ ok: true });
   });
 
-  socket.on("disconnect", () => {
+  socket.on("disconnect", async () => {
     const lobbyId = socket.data.lobbyId;
     const playerId = socket.data.playerId;
     logDebug("socket disconnected", { socketId: socket.id, lobbyId, playerId });
@@ -611,6 +740,11 @@ io.on("connection", (socket) => {
     logDebug("disconnect cleanup", { socketId: socket.id, lobbyId, playerId });
     if (updated) {
       io.to(lobbyId).emit("lobby-updated", updated);
+
+      const disconnectedLobby = getLobby(lobbyId);
+      if (disconnectedLobby?.rematchSourceLobbyId) {
+        await emitGameStateToLobby(disconnectedLobby.rematchSourceLobbyId);
+      }
     }
   });
 });

@@ -17,6 +17,8 @@ const TRANSLATIONS = {
     working: "Working...",
     continue: "Continue",
 
+    lobbyName: "Lobby name",
+    enterLobbyName: "Enter a lobby name",
     startNewGameTitle: "Start new game",
     joinLobbyTitle: "Join lobby",
     quickLobbyGame: "Quick Lobby Game",
@@ -32,6 +34,7 @@ const TRANSLATIONS = {
     yourGames: "Your Games",
     noYourGames: "No active games saved on this browser.",
     rejoinGame: "Rejoin",
+    viewResults: "View Results",
     spectateGame: "Spectate",
     players: "Players",
     join: "Join",
@@ -85,6 +88,7 @@ const TRANSLATIONS = {
     unsavedSettingsTitle: "Unsaved Settings",
     unsavedSettingsText: "You have unsaved lobby settings. Starting now will use the last saved values.",
     saveFirst: "Save First",
+    saveFirstAndStart: "Save first and start",
     continueAnyway: "Continue Anyway",
 
     game: "Game",
@@ -139,7 +143,10 @@ const TRANSLATIONS = {
     remainingPlayers: "Remaining Players",
     rematch: "Rematch",
     goToRematch: "Go to Rematch",
-    joinRematch: "Join Rematch"
+    joinRematch: "Join Rematch",
+    rematchPopupTitle: "New Match Available",
+    rematchPopupText: "The host started a new match! Would you like to join?",
+    dismiss: "Dismiss"
   },
   de: {
     uiLanguage: "Sprache",
@@ -155,6 +162,8 @@ const TRANSLATIONS = {
     working: "Wird ausgeführt...",
     continue: "Weiter",
 
+    lobbyName: "Lobbyname",
+    enterLobbyName: "Gib einen Lobbynamen ein",
     startNewGameTitle: "Neues Spiel starten",
     joinLobbyTitle: "Lobby beitreten",
     quickLobbyGame: "Schnelles Lobby-Spiel",
@@ -170,6 +179,7 @@ const TRANSLATIONS = {
     yourGames: "Deine Spiele",
     noYourGames: "Keine aktiven Spiele in diesem Browser gespeichert.",
     rejoinGame: "Wieder beitreten",
+    viewResults: "Ergebnisse ansehen",
     spectateGame: "Zuschauen",
     players: "Spieler",
     join: "Beitreten",
@@ -223,6 +233,7 @@ const TRANSLATIONS = {
     unsavedSettingsTitle: "Ungespeicherte Einstellungen",
     unsavedSettingsText: "Du hast ungespeicherte Lobby-Einstellungen. Beim Start werden die zuletzt gespeicherten Werte verwendet.",
     saveFirst: "Zuerst speichern",
+    saveFirstAndStart: "Speichern und starten",
     continueAnyway: "Trotzdem fortfahren",
 
     game: "Spiel",
@@ -275,7 +286,10 @@ const TRANSLATIONS = {
     remainingPlayers: "Weitere Spieler",
     rematch: "Revanche",
     goToRematch: "Zur Revanche",
-    joinRematch: "Revanche beitreten"
+    joinRematch: "Revanche beitreten",
+    rematchPopupTitle: "Neues Spiel verfügbar",
+    rematchPopupText: "Der Host hat ein neues Spiel gestartet! Möchtest du beitreten?",
+    dismiss: "Schließen"
   }
 };
 

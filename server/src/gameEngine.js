@@ -273,6 +273,7 @@ function startGame(lobby) {
     round: null,
     chatLog: [],
     chatRate: {},
+    rematchJoinedByPlayerId: {},
     timers: {
       clue: null,
       guess: null,
@@ -612,6 +613,8 @@ function guessCard(game, playerId, index) {
   // Check if this is one of the clue giver's selected target cards
   const isTargetCard = round.clueSelectedIndexes.includes(numeric);
 
+  const maxGuesses = round.clueCount + 1;
+
   if (isTargetCard) {
     // Correctly guessed a selected card
     guesser.guessedCorrect.push(numeric);
@@ -623,17 +626,24 @@ function guessCard(game, playerId, index) {
     const allTargetsFound = round.clueSelectedIndexes.every((idx) =>
       guesser.guessedCorrect.includes(idx)
     );
-    if (allTargetsFound) {
+    const totalGuesses = guesser.guessedCorrect.length + guesser.guessedNeutral.length
+      + guesser.guessedWrongRed.length + guesser.guessedWrongBlack.length;
+    if (allTargetsFound || totalGuesses >= maxGuesses) {
       guesser.finished = true;
     }
     return { ok: true, outcome: "correct", cardIndex: numeric };
   }
 
   if (card.role === "green") {
-    // Non-selected green card: neutral, nothing happens
+    // Non-selected green card: neutral, counts toward guess limit
     guesser.guessedNeutral.push(numeric);
     if (game.playerStats?.[playerId]) {
       game.playerStats[playerId].neutralGreen += 1;
+    }
+    const totalGuesses = guesser.guessedCorrect.length + guesser.guessedNeutral.length
+      + guesser.guessedWrongRed.length + guesser.guessedWrongBlack.length;
+    if (totalGuesses >= maxGuesses) {
+      guesser.finished = true;
     }
     return { ok: true, outcome: "neutral", cardIndex: numeric };
   }
@@ -645,9 +655,7 @@ function guessCard(game, playerId, index) {
       game.playerStats[playerId].red += 1;
     }
     guesser.redHits += 1;
-    if (guesser.redHits >= 2) {
-      guesser.finished = true;
-    }
+    guesser.finished = true;
     return { ok: true, outcome: "red", cardIndex: numeric };
   }
 
@@ -999,6 +1007,9 @@ function getGameViewForPlayer(game, playerId) {
     clueAllEndsAt: round.clueAllEndsAt ?? null,
     chatLog: game.chatLog || [],
     rematchLobbyId: game.rematchLobbyId || null,
+    myRematchJoined: Boolean(playerId && game.rematchJoinedByPlayerId?.[playerId]),
+    rematchHostConnected: false,
+    canJoinRematch: false,
     hostId: game.hostId || null,
     myGuesserState,
     clueGiverMarks,
