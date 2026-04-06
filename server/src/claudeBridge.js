@@ -32,6 +32,14 @@ async function runClaudePrompt(promptText, options = {}) {
     : [...rawArgs, promptText];
 
   return new Promise((resolve, reject) => {
+    const cliMeta = {
+      command,
+      argsTemplate: rawArgs,
+      hasPromptPlaceholder,
+      promptLength: String(promptText || "").length,
+      timeoutMs: Math.max(1000, timeoutMs)
+    };
+
     const child = spawn(command, args, {
       stdio: ["ignore", "pipe", "pipe"]
     });
@@ -46,6 +54,9 @@ async function runClaudePrompt(promptText, options = {}) {
       child.kill("SIGKILL");
       const error = new Error(`Claude CLI timed out after ${timeoutMs}ms.`);
       error.code = "CLI_TIMEOUT";
+      error.cli = cliMeta;
+      error.stdoutSnippet = summarizeOutput(stdout, 300);
+      error.stderrSnippet = summarizeOutput(stderr, 300);
       reject(error);
     }, Math.max(1000, timeoutMs));
 
@@ -61,6 +72,9 @@ async function runClaudePrompt(promptText, options = {}) {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      error.cli = cliMeta;
+      error.stdoutSnippet = summarizeOutput(stdout, 300);
+      error.stderrSnippet = summarizeOutput(stderr, 300);
       reject(error);
     });
 
@@ -77,10 +91,13 @@ async function runClaudePrompt(promptText, options = {}) {
           `Claude CLI exited with code ${code}${signal ? ` (signal: ${signal})` : ""}. stderr: ${summarizeOutput(trimmedStderr)}; stdout: ${summarizeOutput(trimmedStdout)}`
         );
         error.code = "CLI_EXIT_NONZERO";
+        error.cli = cliMeta;
         error.exitCode = code;
         error.signal = signal || null;
         error.stdout = trimmedStdout;
         error.stderr = trimmedStderr;
+        error.stdoutSnippet = summarizeOutput(trimmedStdout, 300);
+        error.stderrSnippet = summarizeOutput(trimmedStderr, 300);
         reject(error);
         return;
       }
@@ -88,7 +105,10 @@ async function runClaudePrompt(promptText, options = {}) {
       if (!trimmedStdout && !trimmedStderr) {
         const error = new Error("Claude CLI returned no output on stdout or stderr.");
         error.code = "CLI_EMPTY_OUTPUT";
+        error.cli = cliMeta;
         error.exitCode = code;
+        error.stdoutSnippet = "(empty)";
+        error.stderrSnippet = "(empty)";
         reject(error);
         return;
       }

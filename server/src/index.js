@@ -85,6 +85,24 @@ function logLLMText(title, value) {
   console.log(`[llm-clue] ${title}\n${text}`);
 }
 
+function buildClaudeErrorDiagnostics(error) {
+  if (!error) {
+    return {
+      code: null,
+      cli: null,
+      stdoutSnippet: null,
+      stderrSnippet: null
+    };
+  }
+
+  return {
+    code: error?.code || null,
+    cli: error?.cli || null,
+    stdoutSnippet: error?.stdoutSnippet || null,
+    stderrSnippet: error?.stderrSnippet || null
+  };
+}
+
 function sleep(ms) {
   if (!ms || ms <= 0) return Promise.resolve();
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -399,7 +417,7 @@ async function runAIAgentClueTurn(lobbyId) {
           roundNumber: liveGame.roundNumber,
           attempt,
           error: previousError,
-          code: error?.code || null
+          ...buildClaudeErrorDiagnostics(error)
         });
         continue;
       }
@@ -559,7 +577,7 @@ async function runSingleAIGuesserTurn(lobbyId, guesserId) {
           attempt,
           retriesUsed: retryCount,
           reason: previousError,
-          code: error?.code || null
+          ...buildClaudeErrorDiagnostics(error)
         });
         continue;
       }
