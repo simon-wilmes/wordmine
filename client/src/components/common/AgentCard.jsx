@@ -128,6 +128,11 @@ export default function AgentCard({ className = "" }) {
 
   return (
     <div className={`agent-card ${className}`}>
+      <div className="agent-card__header">
+        <span className="agent-card__op-label">OPERATION</span>
+        <span className="agent-card__op-name">WORDMINE</span>
+      </div>
+
       <div className="agent-card__stripe" />
 
       <div className="agent-card__body">
@@ -136,13 +141,6 @@ export default function AgentCard({ className = "" }) {
         </div>
 
         <div className="agent-card__info">
-          <div className="agent-card__header">
-            <span className="agent-card__op-label">OPERATION</span>
-            <span className="agent-card__op-name">WORDMINE</span>
-          </div>
-
-          <div className="agent-card__divider" />
-
           <div className="agent-card__fields">
             {FIELDS.map((key) => (
               <div key={key} className="agent-card__field">

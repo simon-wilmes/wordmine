@@ -9,17 +9,22 @@ Realtime multiplayer Codenames-inspired party game with private/public lobbies, 
 - Two game modes: **standard** (rotating clue giver) and **simultaneous clue** (all players give clues, then guess in sequence)
 - Track guesses, penalties, round timing, and cumulative scores
 - In-game chat with rate limiting and automatic round-score breakdowns
+- In-game HUD with live phase status text (for example `HANDLER TRANSMITTING`, `MISSION DEBRIEF`) including animated transmission dots
+- Adaptive tablet-height layout for live games: `Past Rounds` timeline and `Terminal` stay docked at the bottom when space allows, and automatically move below the game content (scrollable page flow) on shorter viewports to prevent overlap
+- Operatives sidebar status labels: `waiting` during clue transmission phases, `guessing` during guess phase, `finished` when done, and `timed out` when guess timer expires before finishing
 - Round-end board reveal + end-game podium with detailed stats
+- Past-round replay timeline with per-cluegiver snapshots (available during live play and on final overview)
 - Rematch flow: host creates a new lobby with same settings and name, other players see a popup and can join with one click
 - Spectator mode for watching live games
 - Reconnect on page refresh (player identity stored in localStorage per lobby)
+- Persistent finished-game history per browser, shown on the landing page
 - Bilingual: board word language per lobby (`en`/`de`) + UI language toggle (`en`/`de`)
 
 ## Tech Stack
 
 - **Client:** React 18 + Vite 5 + React Router 6 + Socket.io Client 4
 - **Server:** Node.js + Express 4 + Socket.io 4
-- **State:** In-memory (resets on server restart)
+- **State:** In-memory for active sessions + SQLite archive for finished games
 - **Styling:** Plain CSS with design tokens (`styles/tokens.css`)
 - **i18n:** Custom context-based provider (`lib/i18n.jsx`), no external library
 - **Production:** Server serves built client at `/${GAME_NAME}` (default: `/wordmine`), configured for Cloudflare Tunnel via `https://games.wilmes.dev`
@@ -54,7 +59,9 @@ The game name prefix is defined in `.env` at the project root:
 GAME_NAME=wordmine
 ```
 
-All URLs are served under `/${GAME_NAME}/` (e.g., `/wordmine/`, `/wordmine/api/...`, `/wordmine/lobby/:id`). To rename the game, change this single value and restart. No domain is hardcoded — the app works on `localhost`, `games.wilmes.dev`, or any other host.
+All URLs are served under `/${GAME_NAME}/` (e.g., `/wordmine/`, `/wordmine/api/...`, `/wordmine/lobby/:id`). Both the production Node server and Vite dev/preview server automatically redirect `/${GAME_NAME}` to `/${GAME_NAME}/` (for example `/wordmine` -> `/wordmine/`) so the app always runs from its canonical base URL. To rename the game, change this single value and restart. No domain is hardcoded — the app works on `localhost`, `games.wilmes.dev`, or any other host.
+
+Cloudflare does not need a special rule for this specific slash redirect when traffic reaches this Node server; the app handles it itself. If you terminate traffic somewhere else before Node, add the equivalent redirect at that layer.
 
 ### Production Build
 
@@ -100,7 +107,8 @@ Flow per round:
    - Red card: **penalty**; guesser is **immediately finished** for the round
    - Black card: **heavy penalty**; guesser finished immediately
 5. Round ends when all targets found, all guessers finished (guess limit, red, or black), or timer expires
-5. Reveal phase shows the full board for a configurable pause, then next round
+6. If the guess timer expires, any still-active guessers are force-marked as finished with timeout status for that round
+7. Reveal phase shows the full board for a configurable pause, then next round
 
 ### Scoring
 
@@ -121,9 +129,9 @@ All settings are per-lobby, editable before game start:
 | `wordLanguage` | `en` / `de` | Board word source file |
 | `cycles` | 1-30 | Number of full rotations through players |
 | `simultaneousClue` | bool | Enable simultaneous clue mode |
-| `cluePhaseSeconds` | -1, 0, or 1-600 | Clue time limit (-1 or 0 = unlimited) |
-| `guessPhaseSeconds` | 10-600 | Guess time limit |
-| `betweenRoundsSeconds` | 0-120 | Reveal/pause duration |
+| `cluePhaseSeconds` | 0+ | Clue time limit (`0` = unlimited) |
+| `guessPhaseSeconds` | 5+ | Guess time limit |
+| `betweenRoundsSeconds` | 0+ | Reveal/pause duration (`0` = no pause) |
 | `clueCardValue` | 1-2000 | Points per target card |
 | `guesserCardPool` | 1-2000 | Bonus pool per card |
 | `rankBonus1/2/3` | 0-2000 | Rank bonuses |
@@ -141,17 +149,41 @@ In-game chat panel ("Terminal") with:
 - Automatic system messages after each round showing per-player score breakdowns with itemized point gains/losses
 - Spectators can read chat but not send messages
 
+## Past-Round Replay
+
+During a running game, all players and spectators can open a replay timeline directly above the Terminal.
+
+- One replay entry is created after each completed clue+guess cycle
+- In standard mode: one entry per round
+- In simultaneous clue mode: one entry per sub-round (per clue giver)
+- Timeline entries are labeled by clue giver and sequence (for example `Alex 1`, `Alex 2`, `Sam 1`)
+- Clicking an entry opens a popup with the final board state for that cycle:
+  - Real card colors (green/red/black)
+  - Clue targets
+  - Who marked/guessed what
+- The popup supports left/right arrow navigation to adjacent replay entries
+- Live gameplay continues in the background while replay is open (timers keep running)
+
+Replay popup auto-closes only when the local player must act in the current live phase (for example they become the active clue giver or an active guesser who is not finished).
+
+The same replay overview is also available on the final game overview screen (`Game Over`).
+
 ## Lobby & Session Flow
 
-1. **Create lobby** (`POST /api/lobbies`) — body includes `name` (player), `visibility`, and `lobbyName`; returns `lobbyId` + `playerId` (host)
-2. **Join lobby** (`POST /api/lobbies/:id/join`) — returns `playerId` for the new player
+1. **Create lobby** (`POST /api/lobbies`) — body includes `name` (player), `visibility`, `lobbyName`, and `browserId`; returns `lobbyId` + `playerId` (host)
+2. **Join lobby** (`POST /api/lobbies/:id/join`) — body includes `name`, `viaInvite`, and `browserId`; returns `playerId` for the new player
 3. **Connect socket** (`join-lobby` event) — joins the Socket.io room, marks player connected
 4. **Start game** (`start-game` event) — host only, requires 2+ players
 5. **Play** — game state pushed to each player via `game-state` with role-appropriate views
 6. **Game over** — podium screen with stats; host can create a rematch lobby
-7. **Disconnect** — player marked offline but not removed; reconnect via stored `playerId` in localStorage
+7. **Quit game (explicit)** — player is removed from the active game and sent back to landing; if the host quits, host role is reassigned to the first remaining player
+8. **Disconnect** — player marked offline but not removed; reconnect via stored `playerId` in localStorage
+
+If explicit quits reduce active players below 2, the game ends immediately as incomplete (`finishedReason: "insufficient_players"`).
 
 Player identity is stored in `localStorage` as a map of `lobbyId -> playerId`, allowing reconnect on page refresh and tracking "Your Games" on the landing page.
+
+A persistent browser-scoped `browserId` is also stored in `localStorage` and used to load finished games from server storage in the `Past Games` section.
 
 ## API & Realtime Contracts
 
@@ -161,9 +193,11 @@ Player identity is stored in `localStorage` as a map of `lobbyId -> playerId`, a
 |--------|------|-------------|
 | `GET` | `/api/lobbies` | List public waiting lobbies |
 | `GET` | `/api/games` | List public in-progress games |
-| `POST` | `/api/lobbies` | Create lobby (body: `name`, `visibility`, `lobbyName`) |
+| `GET` | `/api/games/history?browserId=...` | List finished games for this browser |
+| `GET` | `/api/games/history/:id?browserId=...` | Get archived finished game details |
+| `POST` | `/api/lobbies` | Create lobby (body: `name`, `visibility`, `lobbyName`, `browserId`) |
 | `GET` | `/api/lobbies/:id` | Get lobby + game status |
-| `POST` | `/api/lobbies/:id/join` | Join lobby (body: `name`, `viaInvite`) |
+| `POST` | `/api/lobbies/:id/join` | Join lobby (body: `name`, `viaInvite`, `browserId`) |
 
 ### Socket Events
 
@@ -172,7 +206,7 @@ Player identity is stored in `localStorage` as a map of `lobbyId -> playerId`, a
 | Event | Description |
 |-------|-------------|
 | `join-lobby` | Join socket room (with or without `playerId` for spectating) |
-| `leave-lobby` | Leave and remove player from lobby |
+| `leave-lobby` | Leave and remove player from lobby (waiting/pre-game) |
 | `update-settings` | Host updates lobby settings |
 | `update-lobby-name` | Host renames the lobby |
 | `start-game` | Host starts the game |
@@ -181,6 +215,7 @@ Player identity is stored in `localStorage` as a map of `lobbyId -> playerId`, a
 | `game:submit-clue` | Submit clue word + selected card indexes |
 | `game:mark-card` | Toggle mark on a card (visual only) |
 | `game:guess-card` | Commit a guess on a card |
+| `game:quit` | Leave an active game immediately (removes player from game/lobby) |
 | `game:send-message` | Send chat message |
 | `game:request-rematch` | Host: create rematch lobby; others: join it (payload includes `playerColor` so rematch players can keep their color when available) |
 
@@ -250,11 +285,13 @@ Global toggle in top-right corner. Switches all interface text between English a
 - **Empty/failed build after refactor** — Run `npm run build` in `client/` and `node --check server/src/*.js`.
 - **Words not changing by language** — Verify `wordLanguage` is saved in lobby settings before starting. Ensure word files exist with 25+ lines.
 - **Player can't rejoin after refresh** — Check that `localStorage` has the `lobbyPlayers` entry for that lobby. The server keeps the player slot on disconnect; only explicit `leave-lobby` removes it.
+- **Past games missing** — Check that `localStorage` still contains the same `browserId`; clearing site storage creates a new browser identity.
 - **Game state not updating** — Verify the socket is connected and joined to the correct lobby room. Check browser console for socket errors.
 
 ## Notes
 
-- Storage is in-memory; restarting the server resets all lobbies and games.
+- If the server restarts during an active game, that active game is lost.
+- Finished games are archived in SQLite and can be reloaded from `Past Games` for participating browsers.
 - Private lobbies are not visible in the public list but are joinable via invite link.
 - The rematch flow creates a new private lobby with cloned settings; the old game is not reused.
 - Spectators join by navigating to a game URL without a stored `playerId` for that lobby.

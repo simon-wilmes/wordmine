@@ -12,7 +12,8 @@ const {
   listStartedPublicLobbies,
   markPlayerConnected,
   kickPlayer,
-  removePlayer, // used by leave-lobby only
+  removePlayer,
+  removePlayerFromStartedLobby,
   startGame,
   updateLobbyName,
   updateLobbySettings
@@ -24,6 +25,7 @@ const {
   getGame,
   getGameViewForPlayer,
   guessCard,
+  markTimedOutGuessers,
   shouldEndRound,
   startGame: startEngineGame,
   stopGame,
@@ -32,11 +34,21 @@ const {
   toggleMark,
   validateChatMessage,
   appendChatMessage,
-  registerChatSend
+  registerChatSend,
+  removePlayerFromActiveGame
 } = require("./gameEngine");
+const {
+  archiveFinishedGame,
+  getHistoryGameForBrowser,
+  initPersistence,
+  listHistoryForBrowser,
+  pruneExpiredGames
+} = require("./persistence");
 
 const PORT = process.env.PORT || 3001;
 const GAME_NAME = process.env.GAME_NAME || "wordmine";
+const HISTORY_RETENTION_DAYS = Number(process.env.GAME_HISTORY_RETENTION_DAYS || 90);
+const HISTORY_PRUNE_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const DEBUG = true;
 const app = express();
 const gameRouter = express.Router();
@@ -52,6 +64,12 @@ app.use(express.json());
 app.use((req, _res, next) => {
   logDebug(`HTTP ${req.method} ${req.path}`, req.body || {});
   next();
+});
+
+// Canonicalize the game base URL so clients always load from /<game>/.
+app.get(`/${GAME_NAME}`, (req, res) => {
+  const query = req.url.includes("?") ? req.url.slice(req.url.indexOf("?")) : "";
+  res.redirect(301, `/${GAME_NAME}/${query}`);
 });
 
 gameRouter.get("/health", (_req, res) => {
@@ -74,8 +92,51 @@ gameRouter.get("/api/games", (_req, res) => {
   res.json({ games });
 });
 
+gameRouter.get("/api/games/history", async (req, res) => {
+  const browserId = String(req.query?.browserId || "").trim();
+  if (!browserId) {
+    return res.status(400).json({ error: "browserId is required." });
+  }
+
+  const limit = Number(req.query?.limit || 30);
+  const offset = Number(req.query?.offset || 0);
+
+  try {
+    const history = await listHistoryForBrowser(browserId, { limit, offset });
+    return res.json(history);
+  } catch (error) {
+    console.error("[history] list failed", error);
+    return res.status(500).json({ error: "Could not load game history." });
+  }
+});
+
+gameRouter.get("/api/games/history/:id", async (req, res) => {
+  const browserId = String(req.query?.browserId || "").trim();
+  if (!browserId) {
+    return res.status(400).json({ error: "browserId is required." });
+  }
+
+  try {
+    const detail = await getHistoryGameForBrowser(browserId, req.params.id);
+    if (!detail) {
+      return res.status(404).json({ error: "Historical game not found." });
+    }
+    return res.json(detail);
+  } catch (error) {
+    console.error("[history] detail failed", error);
+    return res.status(500).json({ error: "Could not load historical game." });
+  }
+});
+
 gameRouter.post("/api/lobbies", (req, res) => {
-  const result = createLobby(req.body?.name, req.body?.visibility || "public", null, req.body?.lobbyName || null);
+  const result = createLobby(
+    req.body?.name,
+    req.body?.visibility || "public",
+    null,
+    req.body?.lobbyName || null,
+    null,
+    req.body?.browserId || ""
+  );
   if (result.error) {
     logDebug("create lobby failed", { error: result.error, body: req.body || {} });
     return res.status(400).json({ error: result.error });
@@ -98,7 +159,8 @@ gameRouter.get("/api/lobbies/:id", (req, res) => {
 
 gameRouter.post("/api/lobbies/:id/join", (req, res) => {
   const result = joinLobby(req.params.id, req.body?.name, {
-    viaInvite: Boolean(req.body?.viaInvite)
+    viaInvite: Boolean(req.body?.viaInvite),
+    browserId: req.body?.browserId || ""
   });
   if (result.error) {
     logDebug("join lobby failed", { lobbyId: req.params.id, error: result.error, body: req.body || {} });
@@ -185,6 +247,23 @@ async function clearRematchIfNeeded(removedLobbyDetails) {
   await emitGameStateToLobby(rematchSourceLobbyId);
 }
 
+async function archiveFinishedGameForLobby(lobbyId) {
+  const game = getGame(lobbyId);
+  if (!game || game.status !== "finished" || game.archivedAt) {
+    return;
+  }
+
+  const lobby = getLobby(lobbyId) || null;
+  try {
+    const archived = await archiveFinishedGame(game, lobby);
+    if (archived?.archived) {
+      game.archivedAt = archived.finishedAt;
+    }
+  } catch (error) {
+    console.error("[history] archive failed", { lobbyId, gameId: game.id, error });
+  }
+}
+
 function scheduleGuessTimer(lobbyId) {
   const game = getGame(lobbyId);
   if (!game || !game.round || game.round.phase !== "guess") {
@@ -201,6 +280,7 @@ function scheduleGuessTimer(lobbyId) {
     if (!liveGame || !liveGame.round || liveGame.round.phase !== "guess") {
       return;
     }
+    markTimedOutGuessers(liveGame);
     finishRound(liveGame);
     scheduleRoundEndTimer(lobbyId);
     await emitGameStateToLobby(lobbyId);
@@ -217,7 +297,7 @@ function scheduleClueTimer(lobbyId) {
     return;
   }
 
-  // -1 or 0 means unlimited clue time.
+  // 0 means unlimited clue time.
   if ((game.config?.cluePhaseSeconds || 0) <= 0) {
     return;
   }
@@ -286,6 +366,9 @@ function scheduleRoundEndTimer(lobbyId) {
 
     const result = advanceRound(liveGame);
     if (result.error || result.finishedGame) {
+      if (result.finishedGame) {
+        await archiveFinishedGameForLobby(lobbyId);
+      }
       await emitGameStateToLobby(lobbyId);
       return;
     }
@@ -301,6 +384,70 @@ function scheduleRoundEndTimer(lobbyId) {
 
 io.on("connection", (socket) => {
   logDebug("socket connected", { socketId: socket.id });
+
+  async function processActiveGameQuit(lobbyId, playerId, ack) {
+    const game = getGame(lobbyId);
+    if (!game) {
+      if (ack) ack({ ok: false, error: "Game not found." });
+      return;
+    }
+
+    const gameResult = removePlayerFromActiveGame(game, playerId);
+    if (gameResult.error) {
+      if (ack) ack({ ok: false, error: gameResult.error });
+      return;
+    }
+
+    const lobbyResult = removePlayerFromStartedLobby(lobbyId, playerId);
+    logDebug("game-quit processed", {
+      socketId: socket.id,
+      lobbyId,
+      playerId,
+      endedGame: gameResult.endedGame,
+      removedLobby: lobbyResult.removedLobby,
+      hostReassignedTo: lobbyResult.hostReassignedTo || null
+    });
+
+    socket.leave(lobbyId);
+    socket.data.lobbyId = null;
+    socket.data.playerId = null;
+
+    if (lobbyResult.removedLobby) {
+      clearGameTimers(game);
+      stopGame(lobbyId);
+      io.to(lobbyId).emit("lobby-closed");
+      await clearRematchIfNeeded(lobbyResult.removedLobbyDetails);
+      if (ack) ack({ ok: true, endedGame: gameResult.endedGame, finishedReason: game.finishedReason || null });
+      return;
+    }
+
+    if (lobbyResult.hostReassignedTo) {
+      game.hostId = lobbyResult.hostReassignedTo;
+    }
+
+    if (lobbyResult.lobby) {
+      io.to(lobbyId).emit("lobby-updated", lobbyResult.lobby);
+    }
+
+    clearGameTimers(game);
+    if (gameResult.endedGame) {
+      await archiveFinishedGameForLobby(lobbyId);
+    } else if (gameResult.roundEnded) {
+      scheduleRoundEndTimer(lobbyId);
+    } else if (gameResult.transitionedToGuess) {
+      scheduleGuessTimer(lobbyId);
+    } else if (game.round?.phase === "clue-all") {
+      scheduleClueAllTimer(lobbyId);
+    } else if (game.round?.phase === "clue") {
+      scheduleClueTimer(lobbyId);
+    } else if (game.round?.phase === "guess") {
+      scheduleGuessTimer(lobbyId);
+    }
+
+    await emitGameStateToLobby(lobbyId);
+    if (ack) ack({ ok: true, endedGame: gameResult.endedGame, finishedReason: game.finishedReason || null });
+  }
+
   socket.on("join-lobby", async (payload, ack) => {
     const lobbyId = payload?.lobbyId;
     const playerId = payload?.playerId;
@@ -404,7 +551,7 @@ io.on("connection", (socket) => {
       return;
     }
 
-    const engineStart = startEngineGame(result.lobby);
+    const engineStart = startEngineGame(result.lobbyRaw || result.lobby);
     if (engineStart.error) {
       if (ack) ack({ ok: false, error: engineStart.error });
       return;
@@ -537,6 +684,7 @@ io.on("connection", (socket) => {
     }
 
     if (shouldEndRound(game)) {
+      markTimedOutGuessers(game);
       finishRound(game);
       clearGameTimers(game);
       scheduleRoundEndTimer(lobbyId);
@@ -593,7 +741,14 @@ io.on("connection", (socket) => {
         visibility: "private",
         gameConfig: { ...game.config }
       };
-      const result = createLobby(player.name, "private", clonedSettings, lobby.name || null, playerColor || player.color || null);
+      const result = createLobby(
+        player.name,
+        "private",
+        clonedSettings,
+        lobby.name || null,
+        playerColor || player.color || null,
+        player.browserId || ""
+      );
       if (result.error) {
         if (ack) ack({ ok: false, error: result.error });
         return;
@@ -635,7 +790,11 @@ io.on("connection", (socket) => {
         return;
       }
 
-      const joinResult = joinLobby(game.rematchLobbyId, player.name, { viaInvite: true, preferredColor: playerColor || player.color || null });
+      const joinResult = joinLobby(game.rematchLobbyId, player.name, {
+        viaInvite: true,
+        preferredColor: playerColor || player.color || null,
+        browserId: player.browserId || ""
+      });
       if (joinResult.error) {
         if (ack) ack({ ok: false, error: joinResult.error });
         return;
@@ -699,6 +858,12 @@ io.on("connection", (socket) => {
       return;
     }
 
+    const lobby = getLobby(lobbyId);
+    if (lobby?.status === "started") {
+      await processActiveGameQuit(lobbyId, playerId, ack);
+      return;
+    }
+
     const result = removePlayer(lobbyId, playerId);
     logDebug("leave-lobby processed", {
       socketId: socket.id,
@@ -725,6 +890,29 @@ io.on("connection", (socket) => {
     if (ack) ack({ ok: true });
   });
 
+  socket.on("game:quit", async (payload, ack) => {
+    const lobbyId = payload?.lobbyId || socket.data.lobbyId;
+    const playerId = payload?.playerId || socket.data.playerId;
+
+    if (!lobbyId || !playerId) {
+      if (ack) ack({ ok: false, error: "Missing lobby or player." });
+      return;
+    }
+
+    const lobby = getLobby(lobbyId);
+    if (!lobby) {
+      if (ack) ack({ ok: false, error: "Lobby not found." });
+      return;
+    }
+
+    if (lobby.status !== "started") {
+      if (ack) ack({ ok: false, error: "Game is not active." });
+      return;
+    }
+
+    await processActiveGameQuit(lobbyId, playerId, ack);
+  });
+
   socket.on("disconnect", async () => {
     const lobbyId = socket.data.lobbyId;
     const playerId = socket.data.playerId;
@@ -749,6 +937,25 @@ io.on("connection", (socket) => {
   });
 });
 
-server.listen(PORT, '0.0.0.0', () => {
-  console.log(`Server running on http://0.0.0.0:${PORT}`);
-});
+async function bootstrap() {
+  try {
+    await initPersistence({ retentionDays: HISTORY_RETENTION_DAYS });
+    setInterval(async () => {
+      try {
+        await pruneExpiredGames();
+      } catch (error) {
+        console.error("[history] prune failed", error);
+      }
+    }, HISTORY_PRUNE_INTERVAL_MS);
+  } catch (error) {
+    console.error("Failed to initialize persistence", error);
+    process.exit(1);
+    return;
+  }
+
+  server.listen(PORT, "0.0.0.0", () => {
+    console.log(`Server running on http://0.0.0.0:${PORT}`);
+  });
+}
+
+bootstrap();

@@ -1,5 +1,6 @@
 const STORAGE_KEY = "lobbyPlayers";
 const LEGACY_KEY = "lobbySession";
+const BROWSER_ID_KEY = "browserId";
 
 function readLobbyPlayers() {
   try {
@@ -47,4 +48,33 @@ export function clearStoredPlayerId(lobbyId) {
   const map = readLobbyPlayers();
   delete map[lobbyId];
   localStorage.setItem(STORAGE_KEY, JSON.stringify(map));
+}
+
+function makeBrowserId() {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `${Date.now().toString(16)}-${Math.random().toString(16).slice(2)}-${Math.random().toString(16).slice(2)}`;
+}
+
+function normalizeBrowserId(value) {
+  const normalized = String(value || "").trim();
+  if (normalized.length < 16 || normalized.length > 128) {
+    return "";
+  }
+  return normalized;
+}
+
+export function getStoredBrowserId() {
+  return normalizeBrowserId(localStorage.getItem(BROWSER_ID_KEY) || "");
+}
+
+export function getOrCreateBrowserId() {
+  const existing = getStoredBrowserId();
+  if (existing) {
+    return existing;
+  }
+  const next = makeBrowserId();
+  localStorage.setItem(BROWSER_ID_KEY, next);
+  return next;
 }

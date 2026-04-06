@@ -164,6 +164,7 @@ function buildGuessersState(guesserIds) {
       redHits: 0,
       blackHit: false,
       finished: false,
+      finishReason: null,
       guessTimes: {}
     };
   }
@@ -245,6 +246,99 @@ function initPlayerStats(players) {
   return stats;
 }
 
+function cloneCard(card) {
+  return {
+    index: card.index,
+    word: card.word,
+    role: card.role
+  };
+}
+
+function cloneGuesserState(guesser) {
+  return {
+    marks: [...(guesser.marks || [])],
+    guessedCorrect: [...(guesser.guessedCorrect || [])],
+    guessedWrong: [...(guesser.guessedWrong || [])],
+    guessedWrongRed: [...(guesser.guessedWrongRed || [])],
+    guessedWrongBlack: [...(guesser.guessedWrongBlack || [])],
+    guessedNeutral: [...(guesser.guessedNeutral || [])],
+    redHits: Number(guesser.redHits || 0),
+    blackHit: Boolean(guesser.blackHit),
+    finished: Boolean(guesser.finished),
+    finishReason: guesser.finishReason || null,
+    guessTimes: { ...(guesser.guessTimes || {}) }
+  };
+}
+
+function buildRoundSnapshot(game, round, roundDelta, breakdown) {
+  const playerById = Object.fromEntries((game.players || []).map((p) => [p.id, p]));
+  const subRoundTotal = round.activeClueGiverIds?.length ?? 0;
+  const guessers = {};
+  for (const gid of round.guesserIds || []) {
+    guessers[gid] = cloneGuesserState(round.guessers?.[gid] || {});
+  }
+
+  const boardsByPlayerId = round.boardsByPlayerId
+    ? Object.fromEntries(
+        Object.entries(round.boardsByPlayerId).map(([pid, board]) => [
+          pid,
+          { cards: (board?.cards || []).map(cloneCard) }
+        ])
+      )
+    : null;
+
+  return {
+    id: makeId(),
+    createdAt: Date.now(),
+    roundNumber: game.roundNumber,
+    isSimultaneous: Boolean(game.config?.simultaneousClue),
+    subRoundIndex: subRoundTotal > 0 ? (round.subRoundIndex ?? 0) : null,
+    subRoundTotal,
+    clueGiverId: round.clueGiverId,
+    clueGiverName: playerById[round.clueGiverId]?.name || round.clueGiverId,
+    clueGiverColor: playerById[round.clueGiverId]?.color || null,
+    clue: round.clue,
+    clueCount: round.clueCount,
+    clueSelectedIndexes: [...(round.clueSelectedIndexes || [])],
+    clueSubmittedAt: round.clueSubmittedAt,
+    guessStartedAt: round.guessStartedAt,
+    guessEndsAt: round.guessEndsAt,
+    board: {
+      cards: (round.board?.cards || []).map(cloneCard)
+    },
+    boardsByPlayerId,
+    submittedClues: round.submittedClues
+      ? Object.fromEntries(
+          Object.entries(round.submittedClues).map(([pid, sub]) => [
+            pid,
+            {
+              clue: sub.clue,
+              clueCount: sub.clueCount,
+              clueSelectedIndexes: [...(sub.clueSelectedIndexes || [])],
+              submittedAt: sub.submittedAt
+            }
+          ])
+        )
+      : null,
+    guesserIds: [...(round.guesserIds || [])],
+    guessers,
+    allGuesserActions: (round.guesserIds || []).map((gid) => ({
+      playerId: gid,
+      name: playerById[gid]?.name || gid,
+      color: playerById[gid]?.color || null,
+      ...cloneGuesserState(round.guessers?.[gid] || {})
+    })),
+    scores: (game.players || []).map((p) => ({
+      playerId: p.id,
+      name: p.name,
+      color: p.color || null,
+      total: game.scores?.[p.id]?.total || 0,
+      delta: Math.round(roundDelta?.[p.id] || 0),
+      breakdown: [...(breakdown?.[p.id] || [])]
+    }))
+  };
+}
+
 function startGame(lobby) {
   if (!lobby || !lobby.id) {
     return { error: "Lobby not found." };
@@ -263,13 +357,19 @@ function startGame(lobby) {
     config,
     status: "active",
     createdAt: Date.now(),
-    players: lobby.players.map((p) => ({ id: p.id, name: p.name, color: p.color })),
+    players: lobby.players.map((p) => ({
+      id: p.id,
+      name: p.name,
+      color: p.color,
+      browserId: p.browserId || ""
+    })),
     clueOrder,
     turnIndex: 0,
     roundNumber: 1,
     totalRounds,
     scores: initScores(lobby.players),
     playerStats: initPlayerStats(lobby.players),
+    roundSnapshots: [],
     round: null,
     chatLog: [],
     chatRate: {},
@@ -316,10 +416,12 @@ function buildScoreBreakdown(game, round) {
   for (const cardIndex of round.clueSelectedIndexes) {
     const foundBy = guesserIds.filter((gid) => round.guessers[gid].guessedCorrect.includes(cardIndex)).length;
     const points = Math.round(cfg.clueCardValue * (foundBy / guesserCount));
-    breakdown[round.clueGiverId].push({
-      label: `for card (${round.board.cards[cardIndex]?.word || cardIndex}) with ${foundBy}/${guesserCount} found`,
-      points
-    });
+    if (breakdown[round.clueGiverId]) {
+      breakdown[round.clueGiverId].push({
+        label: `for card (${round.board.cards[cardIndex]?.word || cardIndex}) with ${foundBy}/${guesserCount} found`,
+        points
+      });
+    }
   }
 
   if (cfg.penalizeClueGiverForWrongGuesses) {
@@ -327,17 +429,21 @@ function buildScoreBreakdown(game, round) {
       const g = round.guessers[gid];
       if (g.redHits > 0) {
         const points = -Math.round((g.redHits * cfg.redPenalty) / guesserCount);
-        breakdown[round.clueGiverId].push({
-          label: `red cards by guessers (${g.redHits})`,
-          points
-        });
+        if (breakdown[round.clueGiverId]) {
+          breakdown[round.clueGiverId].push({
+            label: `red cards by guessers (${g.redHits})`,
+            points
+          });
+        }
       }
       if (g.blackHit) {
         const points = -Math.round(cfg.blackPenalty / guesserCount);
-        breakdown[round.clueGiverId].push({
-          label: "black card by guesser",
-          points
-        });
+        if (breakdown[round.clueGiverId]) {
+          breakdown[round.clueGiverId].push({
+            label: "black card by guesser",
+            points
+          });
+        }
       }
     }
   }
@@ -436,6 +542,10 @@ function clearGameTimers(game) {
     clearTimeout(game.timers.clue);
     game.timers.clue = null;
   }
+  if (game.timers.clueGrace) {
+    clearTimeout(game.timers.clueGrace);
+    game.timers.clueGrace = null;
+  }
   if (game.timers.guess) {
     clearTimeout(game.timers.guess);
     game.timers.guess = null;
@@ -455,6 +565,171 @@ function stopGame(lobbyId) {
 
 function ensurePlayer(game, playerId) {
   return game.players.some((p) => p.id === playerId);
+}
+
+function forceFinishGameIncomplete(game, reason = "insufficient_players") {
+  if (!game) return;
+  game.status = "finished";
+  game.finishedReason = reason;
+  const round = getRound(game);
+  if (round && round.phase !== "round-end") {
+    round.phase = "round-end";
+    round.phaseStartedAt = Date.now();
+    round.roundEndEndsAt = Date.now();
+  }
+}
+
+function removeFromClueOrder(game, playerId) {
+  const oldOrder = Array.isArray(game.clueOrder) ? [...game.clueOrder] : [];
+  if (oldOrder.length === 0) {
+    game.clueOrder = [];
+    game.turnIndex = 0;
+    return;
+  }
+
+  const removedOrderIndex = oldOrder.indexOf(playerId);
+  const currentOrderIndex = game.turnIndex % oldOrder.length;
+  game.clueOrder = oldOrder.filter((id) => id !== playerId);
+
+  if (game.clueOrder.length === 0) {
+    game.turnIndex = 0;
+    return;
+  }
+
+  if (removedOrderIndex === currentOrderIndex) {
+    // Keep the next clue giver in order after advanceRound increments turnIndex.
+    game.turnIndex -= 1;
+  } else if (removedOrderIndex >= 0 && removedOrderIndex < currentOrderIndex) {
+    game.turnIndex -= 1;
+  }
+
+  if (game.turnIndex >= game.clueOrder.length) {
+    game.turnIndex = game.turnIndex % game.clueOrder.length;
+  }
+}
+
+function removePlayerFromActiveGame(game, playerId) {
+  if (!game) return { error: "Game not found." };
+
+  const playerIndex = game.players.findIndex((p) => p.id === playerId);
+  if (playerIndex < 0) {
+    return { error: "Player is not part of this game." };
+  }
+
+  const round = getRound(game);
+  const wasClueGiver = round?.clueGiverId === playerId;
+  const hadSubmittedClue = Boolean(round?.submittedClues?.[playerId]);
+
+  const [removedPlayer] = game.players.splice(playerIndex, 1);
+  removeFromClueOrder(game, playerId);
+
+  if (round?.boardsByPlayerId && round.boardsByPlayerId[playerId]) {
+    delete round.boardsByPlayerId[playerId];
+  }
+
+  if (Array.isArray(round?.guesserIds)) {
+    round.guesserIds = round.guesserIds.filter((id) => id !== playerId);
+  }
+  if (round?.guessers?.[playerId]) {
+    delete round.guessers[playerId];
+  }
+  if (round?.submittedClues?.[playerId]) {
+    delete round.submittedClues[playerId];
+  }
+  if (Array.isArray(round?.activeClueGiverIds)) {
+    const currentActive = round.activeClueGiverIds[round.subRoundIndex || 0];
+    round.activeClueGiverIds = round.activeClueGiverIds.filter((id) => id !== playerId);
+    if (currentActive === playerId) {
+      round.subRoundIndex = Math.max(0, Math.min(round.subRoundIndex || 0, round.activeClueGiverIds.length - 1));
+    }
+  }
+
+  if (game.hostId === playerId) {
+    game.hostId = game.players[0]?.id || null;
+  }
+
+  if (game.players.length < 2) {
+    forceFinishGameIncomplete(game, "insufficient_players");
+    return {
+      ok: true,
+      removedPlayer,
+      endedGame: true,
+      reason: "insufficient_players",
+      roundEnded: false,
+      transitionedToGuess: false
+    };
+  }
+
+  // If the active clue giver leaves mid-cycle, skip that cycle to avoid dangling references.
+  if ((round?.phase === "clue" || round?.phase === "guess") && wasClueGiver) {
+    if (round?.simultaneousMode && round.phase === "guess") {
+      round.subRoundIndex = (round.subRoundIndex || 0) - 1;
+    }
+    round.clue = null;
+    round.clueCount = 0;
+    round.clueSelectedIndexes = [];
+    round.guesserIds = [];
+    round.guessers = {};
+    round.guessEndsAt = null;
+    finishRound(game);
+    return {
+      ok: true,
+      removedPlayer,
+      endedGame: false,
+      reason: null,
+      roundEnded: true,
+      transitionedToGuess: false
+    };
+  }
+
+  if (round?.phase === "clue-all") {
+    const submittedCount = Object.keys(round.submittedClues || {}).length;
+    if (submittedCount >= game.players.length && game.players.length > 0) {
+      const transitionResult = transitionClueAllToFirstSubRound(game);
+      if (transitionResult.skippedToRoundEnd) {
+        return {
+          ok: true,
+          removedPlayer,
+          endedGame: false,
+          reason: null,
+          roundEnded: true,
+          transitionedToGuess: false
+        };
+      }
+      return {
+        ok: true,
+        removedPlayer,
+        endedGame: false,
+        reason: null,
+        roundEnded: false,
+        transitionedToGuess: true
+      };
+    }
+  }
+
+  if (round?.phase === "guess") {
+    const allGuessersDone = round.guesserIds.length === 0 || shouldEndRound(game);
+    if (allGuessersDone) {
+      finishRound(game);
+      return {
+        ok: true,
+        removedPlayer,
+        endedGame: false,
+        reason: null,
+        roundEnded: true,
+        transitionedToGuess: false
+      };
+    }
+  }
+
+  return {
+    ok: true,
+    removedPlayer,
+    endedGame: false,
+    reason: hadSubmittedClue ? "submitted_clue_removed" : null,
+    roundEnded: false,
+    transitionedToGuess: false
+  };
 }
 
 function getRound(game) {
@@ -630,6 +905,7 @@ function guessCard(game, playerId, index) {
       + guesser.guessedWrongRed.length + guesser.guessedWrongBlack.length;
     if (allTargetsFound || totalGuesses >= maxGuesses) {
       guesser.finished = true;
+      guesser.finishReason = allTargetsFound ? "completed" : "guess-limit";
     }
     return { ok: true, outcome: "correct", cardIndex: numeric };
   }
@@ -644,6 +920,7 @@ function guessCard(game, playerId, index) {
       + guesser.guessedWrongRed.length + guesser.guessedWrongBlack.length;
     if (totalGuesses >= maxGuesses) {
       guesser.finished = true;
+      guesser.finishReason = "guess-limit";
     }
     return { ok: true, outcome: "neutral", cardIndex: numeric };
   }
@@ -656,6 +933,7 @@ function guessCard(game, playerId, index) {
     }
     guesser.redHits += 1;
     guesser.finished = true;
+    guesser.finishReason = "red";
     return { ok: true, outcome: "red", cardIndex: numeric };
   }
 
@@ -667,6 +945,7 @@ function guessCard(game, playerId, index) {
     }
     guesser.blackHit = true;
     guesser.finished = true;
+    guesser.finishReason = "black";
     return { ok: true, outcome: "black", cardIndex: numeric };
   }
 
@@ -703,7 +982,9 @@ function computeRoundScores(game) {
     }
   }
 
-  roundDelta[clueGiverId] += Math.round(clueScore);
+  if (Object.prototype.hasOwnProperty.call(roundDelta, clueGiverId)) {
+    roundDelta[clueGiverId] += Math.round(clueScore);
+  }
 
   // Guesser scoring per selected card with rank bonuses and time-weighted split.
   for (const cardIndex of round.clueSelectedIndexes) {
@@ -762,6 +1043,31 @@ function computeRoundScores(game) {
   return roundDelta;
 }
 
+function markTimedOutGuessers(game) {
+  const round = getRound(game);
+  if (!round || round.phase !== "guess") {
+    return false;
+  }
+
+  const hasTimedOut = Date.now() >= (round.guessEndsAt || 0);
+  if (!hasTimedOut) {
+    return false;
+  }
+
+  let changed = false;
+  for (const gid of round.guesserIds) {
+    const guesser = round.guessers[gid];
+    if (!guesser || guesser.finished) {
+      continue;
+    }
+    guesser.finished = true;
+    guesser.finishReason = "timeout";
+    changed = true;
+  }
+
+  return changed;
+}
+
 function shouldEndRound(game) {
   const round = getRound(game);
   if (round.phase !== "guess") return false;
@@ -784,6 +1090,11 @@ function finishRound(game) {
   round.roundEndEndsAt = round.phaseStartedAt + (game.config?.betweenRoundsSeconds || 15) * 1000;
   const roundDelta = computeRoundScores(game);
   const breakdown = buildScoreBreakdown(game, round);
+  const snapshot = buildRoundSnapshot(game, round, roundDelta, breakdown);
+  if (!Array.isArray(game.roundSnapshots)) {
+    game.roundSnapshots = [];
+  }
+  game.roundSnapshots.push(snapshot);
   for (const player of game.players) {
     const entry = buildScoreChatEntry(game, player.id, breakdown[player.id] || [], roundDelta);
     appendChatMessage(game, entry);
@@ -889,7 +1200,8 @@ function getGameViewForPlayer(game, playerId) {
       redCount: g.guessedWrongRed.length,
       blackCount: g.guessedWrongBlack.length,
       wrongCount: g.guessedWrong.length,
-      finished: g.finished
+      finished: g.finished,
+      finishReason: g.finishReason || null
     };
   });
 
@@ -903,7 +1215,8 @@ function getGameViewForPlayer(game, playerId) {
         guessedNeutral: [...round.guessers[playerId].guessedNeutral],
         redHits: round.guessers[playerId].redHits,
         blackHit: round.guessers[playerId].blackHit,
-        finished: round.guessers[playerId].finished
+        finished: round.guessers[playerId].finished,
+        finishReason: round.guessers[playerId].finishReason || null
       }
     : null;
 
@@ -916,7 +1229,8 @@ function getGameViewForPlayer(game, playerId) {
           guessedWrongRed: [...round.guessers[gid].guessedWrongRed],
           guessedWrongBlack: [...round.guessers[gid].guessedWrongBlack],
           guessedNeutral: [...round.guessers[gid].guessedNeutral],
-          finished: round.guessers[gid].finished
+          finished: round.guessers[gid].finished,
+          finishReason: round.guessers[gid].finishReason || null
         };
         return acc;
       }, {})
@@ -936,7 +1250,8 @@ function getGameViewForPlayer(game, playerId) {
           guessedWrongRed: [...g.guessedWrongRed],
           guessedWrongBlack: [...g.guessedWrongBlack],
           guessedNeutral: [...g.guessedNeutral],
-          finished: g.finished
+          finished: g.finished,
+          finishReason: g.finishReason || null
         };
       })
     : [];
@@ -977,7 +1292,8 @@ function getGameViewForPlayer(game, playerId) {
     role,
     clueGiver: {
       id: round.clueGiverId,
-      name: clueGiver?.name || "Unknown"
+      name: clueGiver?.name || "Unknown",
+      color: clueGiver?.color || null
     },
     clue: round.clue,
     clueCount: round.clueCount,
@@ -1006,11 +1322,13 @@ function getGameViewForPlayer(game, playerId) {
     subRoundTotal: round.activeClueGiverIds?.length ?? 0,
     clueAllEndsAt: round.clueAllEndsAt ?? null,
     chatLog: game.chatLog || [],
+    roundSnapshots: game.roundSnapshots || [],
     rematchLobbyId: game.rematchLobbyId || null,
     myRematchJoined: Boolean(playerId && game.rematchJoinedByPlayerId?.[playerId]),
     rematchHostConnected: false,
     canJoinRematch: false,
     hostId: game.hostId || null,
+    finishedReason: game.finishedReason || null,
     myGuesserState,
     clueGiverMarks,
     allGuesserActions,
@@ -1025,6 +1343,7 @@ module.exports = {
   getGame,
   getGameViewForPlayer,
   guessCard,
+  markTimedOutGuessers,
   shouldEndRound,
   startGame,
   stopGame,
@@ -1034,5 +1353,6 @@ module.exports = {
   validateChatMessage,
   appendChatMessage,
   registerChatSend,
-  clearGameTimers
+  clearGameTimers,
+  removePlayerFromActiveGame
 };

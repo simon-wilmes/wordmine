@@ -24,20 +24,34 @@ export function listGames() {
   return request("/api/games");
 }
 
-export function createLobby(name, visibility, lobbyName = null) {
+export function createLobby(name, visibility, lobbyName = null, browserId = "") {
   return request("/api/lobbies", {
     method: "POST",
-    body: JSON.stringify({ name, visibility, lobbyName })
+    body: JSON.stringify({ name, visibility, lobbyName, browserId })
   });
 }
 
-export function joinLobby(lobbyId, name, viaInvite = false) {
+export function joinLobby(lobbyId, name, viaInvite = false, browserId = "") {
   return request(`/api/lobbies/${lobbyId}/join`, {
     method: "POST",
-    body: JSON.stringify({ name, viaInvite })
+    body: JSON.stringify({ name, viaInvite, browserId })
   });
 }
 
 export function getLobby(lobbyId) {
   return request(`/api/lobbies/${lobbyId}`);
+}
+
+export function getGameHistory(browserId, limit = 30, offset = 0) {
+  const params = new URLSearchParams({
+    browserId,
+    limit: String(limit),
+    offset: String(offset)
+  });
+  return request(`/api/games/history?${params.toString()}`);
+}
+
+export function getHistoricalGame(lobbyId, browserId) {
+  const params = new URLSearchParams({ browserId });
+  return request(`/api/games/history/${lobbyId}?${params.toString()}`);
 }

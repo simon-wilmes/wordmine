@@ -1,18 +1,80 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { getLobby } from "../lib/api";
+import { getHistoricalGame, getLobby } from "../lib/api";
 import StatsChips from "../components/game/StatsChips";
 import { useI18n } from "../lib/i18n";
-import { cardClass, getCardMarkerNames } from "../lib/gameViewModel";
-import { getStoredPlayerId, setStoredPlayerId } from "../lib/session";
+import { cardClass, getCardMarkerNames, getWordLengthClass } from "../lib/gameViewModel";
+import { clearStoredPlayerId, getOrCreateBrowserId, getStoredPlayerId, setStoredPlayerId } from "../lib/session";
 import { getSocket } from "../lib/socket";
 
 const PHASE_LABELS = {
-  clue: "⟡ Handler Transmitting",
-  "clue-all": "⟡ All Handlers Transmitting",
-  guess: "⚡ Operatives Active",
-  "round-end": "⟐ Mission Debrief",
+  clue: "HANDLER TRANSMITTING",
+  "clue-all": "HANDLERS TRANSMITTING",
+  guess: "OPERATIVES ACTIVE",
+  "round-end": "MISSION DEBRIEF",
 };
+
+const PHASES_WITH_TRANSMISSION_DOTS = new Set(["clue", "clue-all", "round-end"]);
+
+const ROLE_LABEL_KEYS = {
+  "clue-giver": "roleClueGiver",
+  guesser: "roleGuesser",
+  "clue-all": "roleClueAll",
+  viewer: "roleViewer"
+};
+function parseColorToRgb(color) {
+  if (!color || typeof color !== "string") return null;
+  const raw = color.trim();
+
+  const hexMatch = raw.match(/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/);
+  if (hexMatch) {
+    const hex = hexMatch[1];
+    if (hex.length === 3) {
+      return {
+        r: parseInt(`${hex[0]}${hex[0]}`, 16),
+        g: parseInt(`${hex[1]}${hex[1]}`, 16),
+        b: parseInt(`${hex[2]}${hex[2]}`, 16)
+      };
+    }
+    return {
+      r: parseInt(hex.slice(0, 2), 16),
+      g: parseInt(hex.slice(2, 4), 16),
+      b: parseInt(hex.slice(4, 6), 16)
+    };
+  }
+
+  const rgbMatch = raw.match(/^rgba?\((\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})(?:\s*,\s*([0-9.]+))?\)$/i);
+  if (rgbMatch) {
+    return {
+      r: Math.max(0, Math.min(255, Number(rgbMatch[1]))),
+      g: Math.max(0, Math.min(255, Number(rgbMatch[2]))),
+      b: Math.max(0, Math.min(255, Number(rgbMatch[3])))
+    };
+  }
+
+  return null;
+}
+
+function getReadableTextColor(backgroundColor) {
+  const rgb = parseColorToRgb(backgroundColor);
+  if (!rgb) return "#ffffff";
+  const luminance = (0.299 * rgb.r + 0.587 * rgb.g + 0.114 * rgb.b) / 255;
+  return luminance > 0.6 ? "#0f1115" : "#ffffff";
+}
+
+function getMarkerPillStyle(entry) {
+  if (!entry?.color) return undefined;
+  if (entry.state === "mark") {
+    return { color: entry.color, borderColor: entry.color };
+  }
+
+  return {
+    backgroundColor: entry.color,
+    borderColor: entry.color,
+    color: getReadableTextColor(entry.color),
+    textShadow: "none"
+  };
+}
 
 export default function GamePage() {
   const { t } = useI18n();
@@ -20,8 +82,10 @@ export default function GamePage() {
   const { lobbyId } = useParams();
   const resolvedPlayerId = getStoredPlayerId(lobbyId) || null;
   const playerId = resolvedPlayerId;
+  const browserId = getOrCreateBrowserId();
 
   const [game, setGame] = useState(null);
+  const [isArchivedGame, setIsArchivedGame] = useState(false);
   const [error, setError] = useState("");
   const [clue, setClue] = useState("");
   const [selectedCards, setSelectedCards] = useState([]);
@@ -29,7 +93,20 @@ export default function GamePage() {
   const [chatInput, setChatInput] = useState("");
   const [isChatOpen, setIsChatOpen] = useState(true);
   const [showRematchPopup, setShowRematchPopup] = useState(false);
+  const [showReplayPopup, setShowReplayPopup] = useState(false);
+  const [selectedSnapshotId, setSelectedSnapshotId] = useState(null);
+  const [timelineBottomPx, setTimelineBottomPx] = useState(176);
+  const [shouldFloatBottomPanels, setShouldFloatBottomPanels] = useState(true);
+  const [phaseDotCount, setPhaseDotCount] = useState(0);
+  const [showQuitConfirm, setShowQuitConfirm] = useState(false);
+  const [isQuitting, setIsQuitting] = useState(false);
   const rematchPopupShownForLobbyId = useRef(null);
+  const chatShellRef = useRef(null);
+  const chatLogRef = useRef(null);
+  const chatShouldStickToBottomRef = useRef(true);
+  const lastChatCountRef = useRef(0);
+  const gamePageRef = useRef(null);
+  const replayTimelineRef = useRef(null);
 
   const isClueGiver = game?.role === "clue-giver";
   const isClueAll = game?.role === "clue-all";
@@ -40,6 +117,26 @@ export default function GamePage() {
   clueRef.current = clue;
   selectedCardsRef.current = selectedCards;
   const myFinished = Boolean(game?.myGuesserState?.finished);
+  const roundSnapshots = game?.roundSnapshots || [];
+
+  const selectedSnapshotIndex = useMemo(
+    () => roundSnapshots.findIndex((snapshot) => snapshot.id === selectedSnapshotId),
+    [roundSnapshots, selectedSnapshotId]
+  );
+
+  const selectedSnapshot = selectedSnapshotIndex >= 0 ? roundSnapshots[selectedSnapshotIndex] : null;
+
+  const snapshotSequenceById = useMemo(() => {
+    const perGiver = new Map();
+    const seqById = {};
+    for (const snapshot of roundSnapshots) {
+      const giverId = snapshot.clueGiverId || "unknown";
+      const next = (perGiver.get(giverId) || 0) + 1;
+      perGiver.set(giverId, next);
+      seqById[snapshot.id] = next;
+    }
+    return seqById;
+  }, [roundSnapshots]);
 
   // How many target cards have been correctly found:
   // - Clue giver sees aggregate across all guessers (has clueSelectedIndexes + allGuesserActions)
@@ -67,6 +164,13 @@ export default function GamePage() {
     () => scoreRows.find((row) => row.playerId === playerId) || null,
     [scoreRows, playerId]
   );
+
+  const clueGiverColor = useMemo(() => {
+    if (game?.clueGiver?.color) return game.clueGiver.color;
+    const clueGiverId = game?.clueGiver?.id;
+    if (!clueGiverId) return null;
+    return scoreRows.find((row) => row.playerId === clueGiverId)?.color || null;
+  }, [game?.clueGiver?.color, game?.clueGiver?.id, scoreRows]);
 
   const endStatsRows = useMemo(() => {
     if (!game?.playerStats || !game?.scores) return [];
@@ -103,34 +207,8 @@ export default function GamePage() {
     }
 
     let mounted = true;
-    const socket = getSocket();
-
-    async function init() {
-      try {
-        const lobbyData = await getLobby(lobbyId);
-        if (lobbyData?.lobby?.status !== "started") {
-          setError(t("gameNotStarted"));
-          return;
-        }
-      } catch (err) {
-        setError(err.message);
-        return;
-      }
-
-      socket.emit("join-lobby", { lobbyId, playerId: resolvedPlayerId }, () => {
-        socket.emit("game:get-state", { lobbyId, playerId: resolvedPlayerId }, (ack) => {
-          if (!mounted) return;
-          if (!ack?.ok) {
-            setError(ack?.error || "Could not load game state.");
-            return;
-          }
-          if (ack.game?.lobbyId && ack.game.lobbyId !== lobbyId) {
-            return;
-          }
-          setGame(ack.game);
-        });
-      });
-    }
+    let socket = null;
+    let hasLiveSocketFlow = false;
 
     function onGameState(nextGame) {
       if (!mounted) return;
@@ -143,14 +221,68 @@ export default function GamePage() {
       }
     }
 
-    socket.on("game-state", onGameState);
+    async function init() {
+      try {
+        const lobbyData = await getLobby(lobbyId);
+        if (lobbyData?.lobby?.status !== "started") {
+          const archived = await getHistoricalGame(lobbyId, browserId);
+          if (!mounted) return;
+          if (archived?.game) {
+            setGame(archived.game);
+            setIsArchivedGame(true);
+            setError("");
+            return;
+          }
+          setError(t("gameNotStarted"));
+          return;
+        }
+      } catch (err) {
+        try {
+          const archived = await getHistoricalGame(lobbyId, browserId);
+          if (!mounted) return;
+          if (archived?.game) {
+            setGame(archived.game);
+            setIsArchivedGame(true);
+            setError("");
+            return;
+          }
+        } catch {
+          // No archived game available.
+        }
+        setError(err.message);
+        return;
+      }
+
+      socket = getSocket();
+      hasLiveSocketFlow = true;
+
+      socket.emit("join-lobby", { lobbyId, playerId: resolvedPlayerId }, () => {
+        socket.emit("game:get-state", { lobbyId, playerId: resolvedPlayerId }, (ack) => {
+          if (!mounted) return;
+          if (!ack?.ok) {
+            setError(ack?.error || "Could not load game state.");
+            return;
+          }
+          if (ack.game?.lobbyId && ack.game.lobbyId !== lobbyId) {
+            return;
+          }
+          setGame(ack.game);
+          setIsArchivedGame(false);
+        });
+      });
+
+      socket.on("game-state", onGameState);
+    }
+
     init();
 
     return () => {
       mounted = false;
-      socket.off("game-state", onGameState);
+      if (socket && hasLiveSocketFlow) {
+        socket.off("game-state", onGameState);
+      }
     };
-  }, [lobbyId, resolvedPlayerId]);
+  }, [browserId, lobbyId, resolvedPlayerId, t]);
 
   // Show rematch popup to non-host players when host creates a rematch
   useEffect(() => {
@@ -180,6 +312,20 @@ export default function GamePage() {
   }, [game?.canJoinRematch, game?.rematchLobbyId, game?.hostId, playerId]);
 
   useEffect(() => {
+    if (!showReplayPopup) return;
+    if (!selectedSnapshotId) {
+      setShowReplayPopup(false);
+      return;
+    }
+    const exists = roundSnapshots.some((snapshot) => snapshot.id === selectedSnapshotId);
+    if (!exists) {
+      setShowReplayPopup(false);
+      setSelectedSnapshotId(null);
+    }
+  }, [showReplayPopup, selectedSnapshotId, roundSnapshots]);
+
+  useEffect(() => {
+    if (isArchivedGame) return;
     const socket = getSocket();
 
     function onRematchClosed() {
@@ -237,8 +383,94 @@ export default function GamePage() {
     return () => clearInterval(interval);
   }, [game?.phaseStartedAt, game?.phase, game?.config]);
 
+  useEffect(() => {
+    if (!showReplayPopup || !game) return;
+    const requiresInput = (
+      (game.phase === "clue" && game.role === "clue-giver")
+      || (game.phase === "clue-all" && game.role === "clue-all" && !game.mySubmittedClue)
+      || (game.phase === "guess" && game.role === "guesser" && !game.myGuesserState?.finished)
+    );
+    if (requiresInput) {
+      setShowReplayPopup(false);
+    }
+  }, [
+    showReplayPopup,
+    game?.phase,
+    game?.role,
+    game?.mySubmittedClue,
+    game?.myGuesserState?.finished,
+    game
+  ]);
+
+  useEffect(() => {
+    if (game?.status === "finished") {
+      setShouldFloatBottomPanels(false);
+      return;
+    }
+
+    const chatShell = chatShellRef.current;
+    const gamePage = gamePageRef.current;
+    if (!chatShell || !gamePage) return;
+
+    const updateBottomPanelsLayout = () => {
+      const chatHeight = Number(chatShell.offsetHeight || 0);
+      const timelineHeight = roundSnapshots.length > 0
+        ? Number(replayTimelineRef.current?.offsetHeight || 0)
+        : 0;
+
+      const nextBottom = Math.max(70, chatHeight + 8);
+      setTimelineBottomPx((prev) => (prev === nextBottom ? prev : nextBottom));
+
+      const gameBottom = gamePage.getBoundingClientRect().bottom;
+      const freeSpaceBelowGame = window.innerHeight - gameBottom;
+      const requiredBottomSpace = chatHeight + timelineHeight + 16;
+      const canFloat = freeSpaceBelowGame >= requiredBottomSpace;
+      setShouldFloatBottomPanels((prev) => (prev === canFloat ? prev : canFloat));
+    };
+
+    updateBottomPanelsLayout();
+    const rafId = requestAnimationFrame(updateBottomPanelsLayout);
+    window.addEventListener("resize", updateBottomPanelsLayout);
+    window.addEventListener("scroll", updateBottomPanelsLayout, { passive: true });
+
+    let observer = null;
+    if (typeof ResizeObserver !== "undefined") {
+      observer = new ResizeObserver(() => updateBottomPanelsLayout());
+      observer.observe(chatShell);
+      observer.observe(gamePage);
+      if (replayTimelineRef.current) observer.observe(replayTimelineRef.current);
+    }
+
+    return () => {
+      cancelAnimationFrame(rafId);
+      window.removeEventListener("resize", updateBottomPanelsLayout);
+      window.removeEventListener("scroll", updateBottomPanelsLayout);
+      if (observer) observer.disconnect();
+    };
+  }, [game?.status, isChatOpen, game?.chatLog?.length, roundSnapshots.length]);
+
+  useEffect(() => {
+    chatShouldStickToBottomRef.current = true;
+    lastChatCountRef.current = 0;
+  }, [lobbyId]);
+
+  useEffect(() => {
+    const chatLog = chatLogRef.current;
+    if (!chatLog || !isChatOpen) return;
+
+    const nextCount = game?.chatLog?.length || 0;
+    const hasNewMessages = nextCount > lastChatCountRef.current;
+
+    if (chatShouldStickToBottomRef.current && (hasNewMessages || nextCount > 0)) {
+      chatLog.scrollTop = chatLog.scrollHeight;
+    }
+
+    lastChatCountRef.current = nextCount;
+  }, [game?.chatLog?.length, isChatOpen]);
+
   // Auto-submit clue when server signals time is up
   useEffect(() => {
+    if (isArchivedGame) return;
     const socket = getSocket();
     function onClueTimeUp() {
       if (!isClueGiver && !isClueAll) {
@@ -257,7 +489,20 @@ export default function GamePage() {
     }
     socket.on("clue-time-up", onClueTimeUp);
     return () => socket.off("clue-time-up", onClueTimeUp);
-  }, [lobbyId, playerId, isClueGiver, isClueAll]);
+  }, [isArchivedGame, lobbyId, playerId, isClueGiver, isClueAll]);
+
+  useEffect(() => {
+    if (!game?.phase || !PHASES_WITH_TRANSMISSION_DOTS.has(game.phase)) {
+      setPhaseDotCount(0);
+      return;
+    }
+
+    const interval = setInterval(() => {
+      setPhaseDotCount((prev) => (prev + 1) % 4);
+    }, 450);
+
+    return () => clearInterval(interval);
+  }, [game?.phase]);
 
   function toggleClueCard(index) {
     if (!isClueGiver && !isClueAll) return;
@@ -311,6 +556,22 @@ export default function GamePage() {
     });
   }
 
+  function quitGame() {
+    if (isArchivedGame || !playerId || isQuitting) return;
+    setIsQuitting(true);
+    setError("");
+    const socket = getSocket();
+    socket.emit("game:quit", { lobbyId, playerId }, (ack) => {
+      setIsQuitting(false);
+      if (!ack?.ok) {
+        setError(ack?.error || "Failed to quit game.");
+        return;
+      }
+      clearStoredPlayerId(lobbyId);
+      navigate("/");
+    });
+  }
+
   function sendChat() {
     if (!playerId) return;
     const message = chatInput.trim();
@@ -324,6 +585,209 @@ export default function GamePage() {
       setChatInput("");
     });
   }
+
+  function handleChatLogScroll(event) {
+    const element = event.currentTarget;
+    const distanceToBottom = element.scrollHeight - element.scrollTop - element.clientHeight;
+    chatShouldStickToBottomRef.current = distanceToBottom <= 12;
+  }
+
+  function openSnapshot(snapshotId) {
+    setSelectedSnapshotId(snapshotId);
+    setShowReplayPopup(true);
+  }
+
+  function closeReplayPopup() {
+    setShowReplayPopup(false);
+  }
+
+  function showPreviousSnapshot() {
+    if (selectedSnapshotIndex <= 0) return;
+    setSelectedSnapshotId(roundSnapshots[selectedSnapshotIndex - 1].id);
+  }
+
+  function showNextSnapshot() {
+    if (selectedSnapshotIndex < 0 || selectedSnapshotIndex >= roundSnapshots.length - 1) return;
+    setSelectedSnapshotId(roundSnapshots[selectedSnapshotIndex + 1].id);
+  }
+
+  const replayPopup = showReplayPopup && selectedSnapshot ? (
+    <div className="modal-backdrop replay-backdrop" role="dialog" aria-modal="true" aria-label={t("pastRoundReview") || "Past Round Review"}>
+      <div className="modal replay-modal">
+        <div className="replay-modal-header">
+          <div>
+            <h3>{t("pastRoundReview") || "Past Round Review"}</h3>
+            <p className="replay-subtitle">
+              {(t("round") || "Round")} {selectedSnapshot.roundNumber}
+              {selectedSnapshot.subRoundTotal > 0
+                ? `.${(selectedSnapshot.subRoundIndex ?? 0) + 1}`
+                : ""}
+              {selectedSnapshot.clueGiverName && (
+                <>
+                  {" - "}
+                  <span style={selectedSnapshot.clueGiverColor ? { color: selectedSnapshot.clueGiverColor } : undefined}>
+                    {selectedSnapshot.clueGiverName}
+                  </span>
+                </>
+              )}
+            </p>
+          </div>
+          <button className="replay-close-btn" onClick={closeReplayPopup} aria-label={t("dismiss") || "Close"}>
+            X
+          </button>
+        </div>
+
+        <div className="replay-nav-row">
+          <div className="replay-clue-chip">
+            <span>{t("currentClue") || "Current clue"}:</span>
+            <strong>{selectedSnapshot.clue || "-"}</strong>
+            <span>x{selectedSnapshot.clueCount || 0}</span>
+          </div>
+        </div>
+
+        <div className="replay-board-wrap">
+          <button
+            className="ghost replay-side-arrow"
+            onClick={showPreviousSnapshot}
+            disabled={selectedSnapshotIndex <= 0}
+            aria-label={t("previousRound") || "Previous"}
+          >
+            &lt;
+          </button>
+          <div className="game-grid replay-grid">
+            {(selectedSnapshot.board?.cards || []).map((card) => {
+              const markerNames = getCardMarkerNames(card.index, selectedSnapshot.allGuesserActions);
+              return (
+                <button
+                  key={`replay-${selectedSnapshot.id}-${card.index}`}
+                  className={[
+                    cardClass(
+                      { ...card, isTarget: (selectedSnapshot.clueSelectedIndexes || []).includes(card.index) },
+                      { phase: "round-end", status: "active", role: "clue-giver" },
+                      false,
+                      false,
+                      false,
+                      false,
+                      false
+                    ),
+                    getWordLengthClass(card.word)
+                  ].join(" ")}
+                  type="button"
+                  disabled
+                >
+                  <span>{card.word}</span>
+                  {markerNames.length > 0 && (
+                    <div className="card-markers">
+                      {markerNames.map((entry) => (
+                        <span
+                          key={`${selectedSnapshot.id}-${entry.key}`}
+                          className={`card-marker-pill ${entry.state}`}
+                          style={entry.color ? { color: entry.color, borderColor: entry.color } : undefined}
+                        >
+                          {entry.name}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+          <button
+            className="ghost replay-side-arrow"
+            onClick={showNextSnapshot}
+            disabled={selectedSnapshotIndex < 0 || selectedSnapshotIndex >= roundSnapshots.length - 1}
+            aria-label={t("nextRound") || "Next"}
+          >
+            &gt;
+          </button>
+        </div>
+
+        <ul className="replay-summary-list">
+          {(selectedSnapshot.allGuesserActions || []).map((actor) => (
+            <li key={`${selectedSnapshot.id}-${actor.playerId}`} className="replay-summary-item">
+              <span style={actor.color ? { color: actor.color } : undefined}>{actor.name}</span>
+              <span>{(actor.guessedCorrect || []).length}✓</span>
+              <span>{(actor.guessedNeutral || []).length}~</span>
+              <span>{(actor.guessedWrongRed || []).length}R</span>
+              <span>{(actor.guessedWrongBlack || []).length}B</span>
+              <span>{(actor.marks || []).length}M</span>
+            </li>
+          ))}
+        </ul>
+      </div>
+    </div>
+  ) : null;
+
+  const quitConfirmModal = showQuitConfirm ? (
+    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label={t("quitGameConfirmTitle")}>
+      <div className="modal">
+        <h3>{t("quitGameConfirmTitle")}</h3>
+        <p style={{ color: "var(--text-muted)", fontSize: "0.88rem" }}>{t("quitGameConfirmText")}</p>
+        <div className="button-row">
+          <button className="cta" onClick={quitGame} disabled={isQuitting}>
+            {isQuitting ? t("working") : t("confirmQuitGame")}
+          </button>
+          <button className="ghost" onClick={() => setShowQuitConfirm(false)} disabled={isQuitting}>
+            {t("stayInGame")}
+          </button>
+        </div>
+      </div>
+    </div>
+  ) : null;
+
+  const replayTimeline = roundSnapshots.length > 0 ? (
+    <section
+      ref={replayTimelineRef}
+      className={[
+        "replay-timeline-shell",
+        game?.status === "finished" ? "replay-timeline-finished" : "",
+        shouldFloatBottomPanels ? "replay-timeline-floating" : "replay-timeline-inline"
+      ].filter(Boolean).join(" ")}
+      style={
+        game?.status === "finished" || !shouldFloatBottomPanels
+          ? undefined
+          : { bottom: `${timelineBottomPx}px` }
+      }
+    >
+      <div className="replay-timeline-inner">
+        <p className="replay-timeline-title">{t("pastRounds") || "Past Rounds"}</p>
+        <div className="replay-timeline-row">
+          {roundSnapshots.map((snapshot) => (
+            <button
+              key={snapshot.id}
+              type="button"
+              className={[
+                "replay-thumb",
+                showReplayPopup && selectedSnapshotId === snapshot.id ? "is-active" : ""
+              ].filter(Boolean).join(" ")}
+              onClick={() => openSnapshot(snapshot.id)}
+              title={`${snapshot.clueGiverName || "Unknown"} ${snapshotSequenceById[snapshot.id] || 1}`}
+            >
+              <span className="replay-thumb-label">
+                <span style={snapshot.clueGiverColor ? { color: snapshot.clueGiverColor } : undefined}>
+                  {snapshot.clueGiverName || "Unknown"}
+                </span>{" "}
+                {snapshotSequenceById[snapshot.id] || 1}
+              </span>
+              <span className="replay-thumb-grid" aria-hidden="true">
+                {(snapshot.board?.cards || []).map((card) => (
+                  <span
+                    key={`${snapshot.id}-thumb-${card.index}`}
+                    className={[
+                      "replay-thumb-cell",
+                      `role-${card.role}`,
+                      (snapshot.clueSelectedIndexes || []).includes(card.index) ? "is-target" : ""
+                    ].filter(Boolean).join(" ")}
+                  />
+                ))}
+              </span>
+            </button>
+          ))}
+        </div>
+      </div>
+    </section>
+  ) : null;
 
   if (error && !game) {
     return (
@@ -352,6 +816,7 @@ export default function GamePage() {
     const podium = endStatsRows.slice(0, 3);
     const others = endStatsRows.slice(3);
     return (
+      <>
       <main className="page game-page game-end-page">
         <section className="card game-center-panel">
           <div className="end-game-header">
@@ -424,13 +889,16 @@ export default function GamePage() {
           </div>
         )}
       </main>
+      {replayTimeline}
+      {replayPopup}
+      </>
     );
   }
 
   // ── ACTIVE GAME ───────────────────────────────────────────────────────────
   return (
     <>
-      <main className="page game-page">
+      <main className="page game-page" ref={gamePageRef}>
 
       {/* LEFT — Scores */}
       <section className="card game-left-panel">
@@ -452,23 +920,29 @@ export default function GamePage() {
             {t("subRound")} {(game.subRoundIndex ?? 0) + 1} / {game.subRoundTotal}
           </p>
         )}
+        <button className="game-quit-button" onClick={() => setShowQuitConfirm(true)} disabled={isQuitting}>
+          {t("quitGame")}
+        </button>
+        <button className="ghost game-back-button" onClick={() => navigate("/")}>{t("backToLanding")}</button>
       </section>
 
       {/* CENTER — Board */}
       <section className="card game-center-panel">
         <div className="game-header">
           <div className="game-title-block">
-            <h1>{t("codenamesVariant")}</h1>
+            <h1 className="game-phase-title" aria-live="polite">
+              <span>{PHASE_LABELS[game.phase] || String(game.phase || "").toUpperCase()}</span>
+              {PHASES_WITH_TRANSMISSION_DOTS.has(game.phase) && (
+                <span className="game-phase-dots" aria-hidden="true">{".".repeat(phaseDotCount)}</span>
+              )}
+            </h1>
             <div className="game-badges-row">
-              <span className={`phase-badge phase-${game.phase}`}>
-                {PHASE_LABELS[game.phase] || game.phase}
-              </span>
               <span className="role-badge">
-                {t("role")}: {game.role}
+                {t("role")}: {t(ROLE_LABEL_KEYS[game.role] || game.role)}
               </span>
               {game.phase !== "clue-all" && (
                 <span className="handler-badge">
-                  {t("clueGiver")}: {game.clueGiver.name}
+                  {t("clueGiver")}: <span style={clueGiverColor ? { color: clueGiverColor } : undefined}>{game.clueGiver?.name}</span>
                 </span>
               )}
               {game.phase === "clue-all" && (
@@ -478,7 +952,6 @@ export default function GamePage() {
               )}
             </div>
           </div>
-          <button className="ghost" onClick={() => navigate("/")}>{t("backToLanding")}</button>
         </div>
 
         {error && <p className="error">{error}</p>}
@@ -505,6 +978,7 @@ export default function GamePage() {
                 key={card.index}
                 className={[
                   cardClass(card, game, selectedForClue, mineCorrect, mineNeutral, mineWrongRed, mineWrongBlack),
+                  getWordLengthClass(card.word),
                   game.phase === "guess" && mineMarked && !mineGuessed ? "mine-mark" : "",
                   game.phase === "guess" && mineGuessed ? "mine-guessed" : "",
                   mineCorrect ? "mine-correct" : "",
@@ -528,7 +1002,7 @@ export default function GamePage() {
                         <span
                           key={entry.key}
                           className={`card-marker-pill ${entry.state}`}
-                          style={entry.color ? { color: entry.color, borderColor: entry.color } : undefined}
+                          style={getMarkerPillStyle(entry)}
                           title={`${entry.name} ${entry.state === "mark" ? "marked" : "guessed"} this card`}
                         >
                           {entry.name}
@@ -644,13 +1118,22 @@ export default function GamePage() {
               let barClass = "operative-bar";
               if (g.blackCount > 0) barClass += " bar-black";
               else if (g.redCount > 0) barClass += " bar-red";
+              else if (g.finishReason === "timeout") barClass += " bar-timeout";
               else if (g.finished && game.clueCount > 0 && g.correctCount >= game.clueCount) barClass += " bar-green";
               else if (g.finished) barClass += " bar-exhausted";
+
+              let statusKey = "finished";
+              if (!g.finished) {
+                statusKey = game.phase === "guess" ? "guessing" : "waiting";
+              } else if (g.finishReason === "timeout") {
+                statusKey = "timedOut";
+              }
+
               return (
                 <li key={g.playerId} className={barClass}>
-                  <span className="operative-bar-name">{g.name}</span>
+                  <span className="operative-bar-name" style={g.color ? { color: g.color } : undefined}>{g.name}</span>
                   <span className="operative-bar-status">
-                    {g.finished ? t("finished") : t("active")}
+                    {t(statusKey)}
                   </span>
                 </li>
               );
@@ -705,9 +1188,16 @@ export default function GamePage() {
           )}
         </section>
       )}
-      </main>
 
-      <section className="game-chat-shell">
+      </main>
+      {replayTimeline}
+      {replayPopup}
+      {quitConfirmModal}
+
+      <section
+        className={`game-chat-shell ${shouldFloatBottomPanels ? "is-floating" : "is-inline"}`.trim()}
+        ref={chatShellRef}
+      >
         <div className="game-chat-inner">
           <div className={`chat-panel ${isChatOpen ? "" : "is-collapsed"}`.trim()}>
             <div className="chat-header">
@@ -724,7 +1214,7 @@ export default function GamePage() {
                 </button>
               </div>
             </div>
-            <div className="chat-log">
+            <div className="chat-log" ref={chatLogRef} onScroll={handleChatLogScroll}>
               {(game.chatLog || []).length === 0 && (
                 <p className="chat-empty">{t("chatEmpty")}</p>
               )}

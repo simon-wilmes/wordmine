@@ -487,7 +487,7 @@ export default function LobbyPage() {
             <label>
               {t("cluePhaseSeconds")}
               <input
-                type="number" min="-1" max="600"
+                type="number" min="0"
                 value={draftSettings.gameConfig?.cluePhaseSeconds ?? 60}
                 onChange={(e) => updateGameConfigField("cluePhaseSeconds", e.target.value)}
                 disabled={!isHost}
@@ -497,7 +497,7 @@ export default function LobbyPage() {
             <label>
               {t("guessPhaseSeconds")}
               <input
-                type="number" min="10" max="600"
+                type="number" min="5"
                 value={draftSettings.gameConfig?.guessPhaseSeconds ?? 60}
                 onChange={(e) => updateGameConfigField("guessPhaseSeconds", e.target.value)}
                 disabled={!isHost}
@@ -506,7 +506,7 @@ export default function LobbyPage() {
             <label>
               {t("betweenRoundsSeconds")}
               <input
-                type="number" min="0" max="120"
+                type="number" min="0"
                 value={draftSettings.gameConfig?.betweenRoundsSeconds ?? 15}
                 onChange={(e) => updateGameConfigField("betweenRoundsSeconds", e.target.value)}
                 disabled={!isHost}

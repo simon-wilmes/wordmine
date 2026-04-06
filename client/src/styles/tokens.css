@@ -28,11 +28,12 @@
   --error: #e05555;
   --success: #3dc46a;
   --operative-exhausted: #4a6fa5;
+  --operative-timeout: #f0a43a;
 
   /* Game card faces */
   --card-face: #f0e8d0;
   --card-face-text: #1a0d1a;
-  --card-face-border: rgba(26, 13, 26, 0.18);
+  --card-border-soft: rgba(255, 255, 255, 0.74);
 
   /* Card type colors */
   --card-agent: #1a6e4e;

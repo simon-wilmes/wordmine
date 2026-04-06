@@ -1,8 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { createLobby, getLobby, joinLobby, listGames, listLobbies } from "../lib/api";
+import { createLobby, getGameHistory, getLobby, joinLobby, listGames, listLobbies } from "../lib/api";
 import { useI18n } from "../lib/i18n";
-import { clearStoredPlayerId, getStoredLobbyIds, getStoredPlayerId, setStoredPlayerId } from "../lib/session";
+import {
+  clearStoredPlayerId,
+  getOrCreateBrowserId,
+  getStoredLobbyIds,
+  getStoredPlayerId,
+  setStoredPlayerId
+} from "../lib/session";
 import AgentCard from "../components/common/AgentCard";
 
 function NameModal({ title, submitLabel, onSubmit, onClose, showVisibility, showLobbyName, t }) {
@@ -83,15 +89,19 @@ export default function LandingPage() {
   const navigate = useNavigate();
   const [search, setSearch] = useSearchParams();
   const [lobbies, setLobbies] = useState([]);
-  const [loadingLobbies, setLoadingLobbies] = useState(true);
+  const [, setLoadingLobbies] = useState(true);
   const [listError, setListError] = useState("");
   const [games, setGames] = useState([]);
-  const [loadingGames, setLoadingGames] = useState(true);
+  const [, setLoadingGames] = useState(true);
   const [gamesError, setGamesError] = useState("");
   const [myGames, setMyGames] = useState([]);
+  const [pastGames, setPastGames] = useState([]);
+  const [pastGamesError, setPastGamesError] = useState("");
+  const [, setLoadingPastGames] = useState(true);
   const [modalMode, setModalMode] = useState(null);
   const [selectedLobbyId, setSelectedLobbyId] = useState("");
   const [inviteJoinMode, setInviteJoinMode] = useState(false);
+  const browserId = useMemo(() => getOrCreateBrowserId(), []);
 
   const modalTitle = useMemo(() => {
     if (modalMode === "create") return t("startNewGameTitle");
@@ -99,29 +109,41 @@ export default function LandingPage() {
     return "";
   }, [modalMode, t]);
 
-  async function refreshLobbies() {
-    setLoadingLobbies(true);
-    setListError("");
+  async function refreshLobbies({ silent = false } = {}) {
+    if (!silent) {
+      setLoadingLobbies(true);
+      setListError("");
+    }
     try {
       const data = await listLobbies();
       setLobbies(data.lobbies || []);
     } catch (err) {
-      setListError(err.message);
+      if (!silent) {
+        setListError(err.message);
+      }
     } finally {
-      setLoadingLobbies(false);
+      if (!silent) {
+        setLoadingLobbies(false);
+      }
     }
   }
 
-  async function refreshGames() {
-    setLoadingGames(true);
-    setGamesError("");
+  async function refreshGames({ silent = false } = {}) {
+    if (!silent) {
+      setLoadingGames(true);
+      setGamesError("");
+    }
     try {
       const data = await listGames();
       setGames(data.games || []);
     } catch (err) {
-      setGamesError(err.message);
+      if (!silent) {
+        setGamesError(err.message);
+      }
     } finally {
-      setLoadingGames(false);
+      if (!silent) {
+        setLoadingGames(false);
+      }
     }
   }
 
@@ -135,8 +157,12 @@ export default function LandingPage() {
       lobbyIds.map(async (id) => {
         try {
           const data = await getLobby(id);
-          if (data?.lobby?.status !== "started") return null;
-          return { ...data.lobby, gameStatus: data?.gameStatus || null };
+          const lobbyStatus = data?.lobby?.status;
+          const gameStatus = data?.gameStatus || null;
+          const isWaitingLobby = lobbyStatus === "waiting";
+          const isActiveGame = lobbyStatus === "started" && gameStatus !== "finished";
+          if (!isWaitingLobby && !isActiveGame) return null;
+          return { ...data.lobby, gameStatus };
         } catch {
           clearStoredPlayerId(id);
           return null;
@@ -146,20 +172,43 @@ export default function LandingPage() {
     setMyGames(results.filter(Boolean));
   }
 
+  async function refreshPastGames({ silent = false } = {}) {
+    if (!silent) {
+      setLoadingPastGames(true);
+      setPastGamesError("");
+    }
+    try {
+      const data = await getGameHistory(browserId, 30, 0);
+      setPastGames(data.games || []);
+    } catch (err) {
+      if (!silent) {
+        setPastGamesError(err.message || "Failed to load history.");
+      }
+    } finally {
+      if (!silent) {
+        setLoadingPastGames(false);
+      }
+    }
+  }
+
   useEffect(() => {
     refreshLobbies();
     refreshGames();
     refreshMyGames();
-    const id = setInterval(refreshLobbies, 3000);
+    refreshPastGames();
+    const id = setInterval(() => {
+      refreshLobbies({ silent: true });
+    }, 3000);
     const gamesId = setInterval(() => {
-      refreshGames();
+      refreshGames({ silent: true });
       refreshMyGames();
+      refreshPastGames({ silent: true });
     }, 5000);
     return () => {
       clearInterval(id);
       clearInterval(gamesId);
     };
-  }, []);
+  }, [browserId]);
 
   useEffect(() => {
     const inviteLobbyId = search.get("join");
@@ -179,13 +228,13 @@ export default function LandingPage() {
   }, [search, setSearch, navigate]);
 
   async function handleCreate({ name, visibility, lobbyName }) {
-    const data = await createLobby(name, visibility, lobbyName);
+    const data = await createLobby(name, visibility, lobbyName, browserId);
     setStoredPlayerId(data.lobby.id, data.playerId);
     navigate(`/lobby/${data.lobby.id}`);
   }
 
   async function handleJoin({ name }) {
-    const data = await joinLobby(selectedLobbyId, name, inviteJoinMode);
+    const data = await joinLobby(selectedLobbyId, name, inviteJoinMode, browserId);
     setStoredPlayerId(data.lobby.id, data.playerId);
     navigate(`/lobby/${data.lobby.id}`);
   }
@@ -212,9 +261,6 @@ export default function LandingPage() {
       <section className="card">
         <div className="active-missions-header">
           <h2>{t("activeLobbies")}</h2>
-          <button className="ghost" onClick={refreshLobbies} disabled={loadingLobbies}>
-            {t("refresh")}
-          </button>
         </div>
 
         {listError && <p className="error">{listError}</p>}
@@ -256,9 +302,6 @@ export default function LandingPage() {
       <section className="card">
         <div className="active-missions-header">
           <h2>{t("ongoingGames")}</h2>
-          <button className="ghost" onClick={refreshGames} disabled={loadingGames}>
-            {t("refresh")}
-          </button>
         </div>
 
         {gamesError && <p className="error">{gamesError}</p>}
@@ -286,9 +329,6 @@ export default function LandingPage() {
       <section className="card">
         <div className="active-missions-header">
           <h2>{t("yourGames")}</h2>
-          <button className="ghost" onClick={refreshMyGames}>
-            {t("refresh")}
-          </button>
         </div>
 
         {myGames.length === 0 && (
@@ -302,16 +342,45 @@ export default function LandingPage() {
                 <div className="lobby-mission-code">{game.name || `Mission ${game.id}`}</div>
                 <p className="lobby-meta">
                   {game.players.length} {t("players")}
-                  {game.gameStatus === "finished" && (
-                    <>
-                      &nbsp;·&nbsp;
-                      <span className="lobby-status-badge finished">{t("finished")}</span>
-                    </>
-                  )}
                 </p>
               </div>
-              <button onClick={() => navigate(`/game/${game.id}`)}>
-                {game.gameStatus === "finished" ? t("viewResults") : t("rejoinGame")}
+              <button onClick={() => navigate(game.status === "waiting" ? `/lobby/${game.id}` : `/game/${game.id}`)}>
+                {t("rejoinGame")}
+              </button>
+            </li>
+          ))}
+        </ul>
+      </section>
+
+      <section className="card">
+        <div className="active-missions-header">
+          <h2>{t("pastGames")}</h2>
+        </div>
+
+        {pastGamesError && <p className="error">{pastGamesError}</p>}
+        {!pastGamesError && pastGames.length === 0 && (
+          <p style={{ color: "var(--text-muted)", fontSize: "0.85rem" }}>{t("noPastGames")}</p>
+        )}
+
+        <ul className="lobby-list">
+          {pastGames.map((game) => (
+            <li key={game.gameId} className="lobby-item">
+              <div>
+                <div className="lobby-mission-code">{game.lobbyName || `Mission ${game.lobbyId}`}</div>
+                <p className="lobby-meta">
+                  {game.playersCount} {t("players")}
+                  &nbsp;·&nbsp;
+                  {new Date(game.finishedAt).toLocaleString()}
+                  {game.winnerName ? (
+                    <>
+                      &nbsp;·&nbsp;
+                      {t("winner")}: {game.winnerName} ({game.winnerScore} {t("pts")})
+                    </>
+                  ) : null}
+                </p>
+              </div>
+              <button onClick={() => navigate(`/game/${game.lobbyId}`)}>
+                {t("viewResults")}
               </button>
             </li>
           ))}

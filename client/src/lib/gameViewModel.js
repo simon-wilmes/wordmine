@@ -55,3 +55,11 @@ export function getCardMarkerNames(cardIndex, actions) {
   }
   return names;
 }
+
+export function getWordLengthClass(word) {
+  const len = String(word || "").length;
+  if (len >= 19) return "word-len-xl";
+  if (len >= 15) return "word-len-lg";
+  if (len >= 11) return "word-len-md";
+  return "word-len-sm";
+}

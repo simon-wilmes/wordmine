@@ -36,6 +36,17 @@ function normalizeName(name) {
   return String(name || "").trim();
 }
 
+function normalizeBrowserId(browserId) {
+  const normalized = String(browserId || "").trim();
+  if (!normalized) {
+    return "";
+  }
+  if (normalized.length < 16 || normalized.length > 128) {
+    return "";
+  }
+  return normalized;
+}
+
 function validateName(name) {
   const trimmed = normalizeName(name);
   if (!trimmed) {
@@ -84,7 +95,7 @@ function validateLobbyName(name) {
   return null;
 }
 
-function createLobby(hostName, visibility = "public", overrideSettings = null, lobbyName = null, preferredColor = null) {
+function createLobby(hostName, visibility = "public", overrideSettings = null, lobbyName = null, preferredColor = null, browserId = "") {
   const nameError = validateName(hostName);
   if (nameError) {
     return { error: nameError };
@@ -119,7 +130,8 @@ function createLobby(hostName, visibility = "public", overrideSettings = null, l
         name: normalizeName(hostName),
         isHost: true,
         connected: false,
-        color: pickColor([], preferredColor)
+        color: pickColor([], preferredColor),
+        browserId: normalizeBrowserId(browserId)
       }
     ]
   };
@@ -180,7 +192,7 @@ function getSerializedLobby(lobbyId) {
 }
 
 function joinLobby(lobbyId, playerName, options = {}) {
-  const { viaInvite = false, preferredColor = null } = options;
+  const { viaInvite = false, preferredColor = null, browserId = "" } = options;
   const nameError = validateName(playerName);
   if (nameError) {
     return { error: nameError };
@@ -212,7 +224,8 @@ function joinLobby(lobbyId, playerName, options = {}) {
     name: cleanName,
     isHost: false,
     connected: false,
-    color: pickColor(lobby.players, preferredColor)
+    color: pickColor(lobby.players, preferredColor),
+    browserId: normalizeBrowserId(browserId)
   });
   lobby.updatedAt = nowIso();
 
@@ -260,8 +273,6 @@ function updateLobbySettings(lobbyId, playerId, patch) {
   }
 
   const rangedFields = [
-    ["guessPhaseSeconds", 10, 600],
-    ["betweenRoundsSeconds", 0, 120],
     ["clueCardValue", 1, 2000],
     ["guesserCardPool", 1, 2000],
     ["rankBonus1", 0, 2000],
@@ -288,10 +299,22 @@ function updateLobbySettings(lobbyId, playerId, patch) {
   }
 
   const cluePhase = Number(nextConfig.cluePhaseSeconds);
-  if (!Number.isInteger(cluePhase) || cluePhase < -1 || cluePhase > 600) {
-    return { error: "cluePhaseSeconds must be -1, 0, or an integer up to 600." };
+  if (!Number.isInteger(cluePhase) || cluePhase < 0) {
+    return { error: "cluePhaseSeconds must be an integer >= 0 (0 means unlimited)." };
   }
   nextConfig.cluePhaseSeconds = cluePhase;
+
+  const guessPhase = Number(nextConfig.guessPhaseSeconds);
+  if (!Number.isInteger(guessPhase) || guessPhase < 5) {
+    return { error: "guessPhaseSeconds must be an integer >= 5." };
+  }
+  nextConfig.guessPhaseSeconds = guessPhase;
+
+  const betweenRounds = Number(nextConfig.betweenRoundsSeconds);
+  if (!Number.isInteger(betweenRounds) || betweenRounds < 0) {
+    return { error: "betweenRoundsSeconds must be an integer >= 0." };
+  }
+  nextConfig.betweenRoundsSeconds = betweenRounds;
 
   const nextWordLanguage = String(nextConfig.wordLanguage || "en").toLowerCase();
   if (!["en", "de"].includes(nextWordLanguage)) {
@@ -327,7 +350,7 @@ function startGame(lobbyId, playerId) {
 
   lobby.status = "started";
   lobby.updatedAt = nowIso();
-  return { lobby: serializeLobby(lobby) };
+  return { lobby: serializeLobby(lobby), lobbyRaw: lobby };
 }
 
 function removePlayer(lobbyId, playerId) {
@@ -355,6 +378,61 @@ function removePlayer(lobbyId, playerId) {
   }
 
   return { removedLobby: false, lobby: serializeLobby(lobby), removedPlayer, removedLobbyDetails: null };
+}
+
+function removePlayerFromStartedLobby(lobbyId, playerId) {
+  const lobby = getLobby(lobbyId);
+  if (!lobby) {
+    return { removedLobby: false, lobby: null, removedPlayer: null, removedLobbyDetails: null, hostReassignedTo: null };
+  }
+
+  const idx = lobby.players.findIndex((p) => p.id === playerId);
+  if (idx < 0) {
+    return {
+      removedLobby: false,
+      lobby: serializeLobby(lobby),
+      removedPlayer: null,
+      removedLobbyDetails: null,
+      hostReassignedTo: null
+    };
+  }
+
+  const [removedPlayer] = lobby.players.splice(idx, 1);
+  lobby.updatedAt = nowIso();
+  const removedLobbyDetails = {
+    id: lobby.id,
+    rematchSourceLobbyId: lobby.rematchSourceLobbyId || null
+  };
+
+  if (lobby.players.length === 0) {
+    lobbies.delete(lobbyId);
+    return {
+      removedLobby: true,
+      lobby: null,
+      removedPlayer,
+      removedLobbyDetails,
+      hostReassignedTo: null
+    };
+  }
+
+  let hostReassignedTo = null;
+  if (removedPlayer.id === lobby.hostId) {
+    const nextHost = lobby.players[0];
+    lobby.hostId = nextHost.id;
+    hostReassignedTo = nextHost.id;
+  }
+
+  for (const player of lobby.players) {
+    player.isHost = player.id === lobby.hostId;
+  }
+
+  return {
+    removedLobby: false,
+    lobby: serializeLobby(lobby),
+    removedPlayer,
+    removedLobbyDetails: null,
+    hostReassignedTo
+  };
 }
 
 function kickPlayer(lobbyId, hostId, targetPlayerId) {
@@ -388,6 +466,7 @@ module.exports = {
   markPlayerConnected,
   kickPlayer,
   removePlayer,
+  removePlayerFromStartedLobby,
   startGame,
   updateLobbyName,
   updateLobbySettings
