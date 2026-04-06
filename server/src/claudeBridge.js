@@ -1,5 +1,12 @@
 const { spawn } = require("child_process");
 
+function summarizeOutput(text, maxLen = 800) {
+  const clean = String(text || "").replace(/\s+/g, " ").trim();
+  if (!clean) return "(empty)";
+  if (clean.length <= maxLen) return clean;
+  return `${clean.slice(0, maxLen)}...`;
+}
+
 function parseArgsFromEnv() {
   const json = process.env.CLAUDE_CLI_ARGS_JSON;
   if (json) {
@@ -57,14 +64,39 @@ async function runClaudePrompt(promptText, options = {}) {
       reject(error);
     });
 
-    child.on("close", (code) => {
+    child.on("close", (code, signal) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+
+      const trimmedStdout = String(stdout || "").trim();
+      const trimmedStderr = String(stderr || "").trim();
+
+      if (code !== 0) {
+        const error = new Error(
+          `Claude CLI exited with code ${code}${signal ? ` (signal: ${signal})` : ""}. stderr: ${summarizeOutput(trimmedStderr)}; stdout: ${summarizeOutput(trimmedStdout)}`
+        );
+        error.code = "CLI_EXIT_NONZERO";
+        error.exitCode = code;
+        error.signal = signal || null;
+        error.stdout = trimmedStdout;
+        error.stderr = trimmedStderr;
+        reject(error);
+        return;
+      }
+
+      if (!trimmedStdout && !trimmedStderr) {
+        const error = new Error("Claude CLI returned no output on stdout or stderr.");
+        error.code = "CLI_EMPTY_OUTPUT";
+        error.exitCode = code;
+        reject(error);
+        return;
+      }
+
       resolve({
         code,
-        stdout: String(stdout || "").trim(),
-        stderr: String(stderr || "").trim()
+        stdout: trimmedStdout,
+        stderr: trimmedStderr
       });
     });
   });
