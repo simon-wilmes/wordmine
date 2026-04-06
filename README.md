@@ -348,6 +348,7 @@ Global toggle in top-right corner. Switches all interface text between English a
 - **Past games missing** — Check that `localStorage` still contains the same `browserId`; clearing site storage creates a new browser identity.
 - **Game state not updating** — Verify the socket is connected and joined to the correct lobby room. Check browser console for socket errors.
 - **Deploy fails with missing Claude token file** — Create `/home/pi/.claude-oauth` and place only the OAuth token string in the file (no `export`, no quotes), then rerun `deploy-pi.sh`.
+- **Claude runs manually but fails in systemd service** — Ensure the generated service has `ProtectHome=false` so the runtime user can access home-based Claude auth/config files.
 
 ## Notes
 

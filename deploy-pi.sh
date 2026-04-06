@@ -69,6 +69,11 @@ if [[ ! -f "$APP_DIR/.env" ]]; then
   echo "GAME_NAME=wordmine" > "$APP_DIR/.env"
 fi
 
+# Default Claude CLI timeout for slower hosts like Raspberry Pi.
+if ! grep -q '^CLAUDE_CLI_TIMEOUT_MS=' "$APP_DIR/.env"; then
+  echo "CLAUDE_CLI_TIMEOUT_MS=90000" >> "$APP_DIR/.env"
+fi
+
 # --- Install dependencies & build client ---
 echo "=== Installing server dependencies ==="
 cd "$APP_DIR/server"
@@ -130,7 +135,7 @@ RestartSec=5
 # Hardening
 NoNewPrivileges=true
 ProtectSystem=full
-ProtectHome=true
+ProtectHome=false
 PrivateTmp=true
 
 [Install]
