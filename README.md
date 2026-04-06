@@ -141,13 +141,14 @@ The server expects a local Claude Code CLI command to be available on the host m
 If you deploy with `deploy-pi.sh`, the script now:
 
 - Installs Claude Code CLI automatically if `claude` is missing
-- Verifies Claude authentication for the runtime Linux user (`codename`)
-- Stops deployment with login instructions if that user is not authenticated
+- Requires a token file at `/home/pi/.claude-oauth` (token only)
+- Injects that token into the generated systemd service as `CLAUDE_CODE_OAUTH_TOKEN`
 
-Manual login command on the Pi:
+Token file setup on the Pi:
 
 ```bash
-sudo -u codename -H claude auth login
+printf '%s\n' 'YOUR_OAUTH_TOKEN_HERE' > /home/pi/.claude-oauth
+chmod 600 /home/pi/.claude-oauth
 ```
 
 Optional environment variables:
@@ -346,7 +347,7 @@ Global toggle in top-right corner. Switches all interface text between English a
 - **Player can't rejoin after refresh** — Check that `localStorage` has the `lobbyPlayers` entry for that lobby. The server keeps the player slot on disconnect; only explicit `leave-lobby` removes it.
 - **Past games missing** — Check that `localStorage` still contains the same `browserId`; clearing site storage creates a new browser identity.
 - **Game state not updating** — Verify the socket is connected and joined to the correct lobby room. Check browser console for socket errors.
-- **Deploy fails with Claude login error** — The `codename` runtime user is not authenticated for Claude Code yet. Run `sudo -u codename -H claude auth login` on the Pi, finish login, then rerun `deploy-pi.sh`.
+- **Deploy fails with missing Claude token file** — Create `/home/pi/.claude-oauth` and place only the OAuth token string in the file (no `export`, no quotes), then rerun `deploy-pi.sh`.
 
 ## Notes
 

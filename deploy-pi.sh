@@ -8,6 +8,7 @@ APP_NAME="codename-competition"
 APP_DIR="/opt/$APP_NAME"
 APP_USER="codename"
 APP_USER_HOME="/home/$APP_USER"
+CLAUDE_TOKEN_FILE="/home/pi/.claude-oauth"
 NODE_VERSION="20"
 PORT=3001
 
@@ -87,13 +88,21 @@ rm -rf "$APP_DIR/client/node_modules"
 # --- Fix ownership ---
 chown -R "$APP_USER":"$APP_USER" "$APP_DIR"
 
-# --- Verify Claude login for runtime user ---
-echo "=== Checking Claude login for user $APP_USER ==="
-if ! sudo -u "$APP_USER" -H bash -lc "claude auth status" >/dev/null 2>&1; then
+# --- Read Claude OAuth token from /home/pi/.claude-oauth ---
+echo "=== Loading Claude OAuth token from $CLAUDE_TOKEN_FILE ==="
+if [[ ! -f "$CLAUDE_TOKEN_FILE" ]]; then
   echo ""
-  echo "ERROR: Claude Code is not logged in for user '$APP_USER'."
-  echo "Run the following command on the Pi, complete login, then rerun this deploy script:"
-  echo "  sudo -u $APP_USER -H claude auth login"
+  echo "ERROR: Missing Claude OAuth token file: $CLAUDE_TOKEN_FILE"
+  echo "Create the file with only the token value (no 'export', no quotes), then rerun deploy."
+  echo ""
+  exit 1
+fi
+
+CLAUDE_OAUTH_TOKEN="$(tr -d '\r\n' < "$CLAUDE_TOKEN_FILE" | xargs)"
+if [[ -z "$CLAUDE_OAUTH_TOKEN" ]]; then
+  echo ""
+  echo "ERROR: $CLAUDE_TOKEN_FILE is empty."
+  echo "Put only the OAuth token in that file, then rerun deploy."
   echo ""
   exit 1
 fi
@@ -113,6 +122,7 @@ WorkingDirectory=$APP_DIR/server
 EnvironmentFile=$APP_DIR/.env
 Environment=PORT=$PORT
 Environment=NODE_ENV=production
+Environment="CLAUDE_CODE_OAUTH_TOKEN=$CLAUDE_OAUTH_TOKEN"
 ExecStart=/usr/bin/node src/index.js
 Restart=always
 RestartSec=5
