@@ -6,6 +6,7 @@ import { getSocket } from "../lib/socket";
 import { clearStoredPlayerId, getStoredPlayerId } from "../lib/session";
 
 const DEBUG = true;
+const MAX_LOBBY_PLAYERS = 8;
 
 function logDebug(message, payload) {
   if (!DEBUG) return;
@@ -51,6 +52,18 @@ export default function LobbyPage() {
 
   const me = useMemo(() => lobby?.players?.find((p) => p.id === playerId), [lobby, playerId]);
   const isHost = !!me?.isHost;
+  const aiCount = useMemo(
+    () => (lobby?.players || []).filter((player) => player.isAI).length,
+    [lobby?.players]
+  );
+  const isLobbyFull = (lobby?.players?.length || 0) >= MAX_LOBBY_PLAYERS;
+  const aiLimitReached = aiCount >= 1;
+  const disableAddAiButton = isAddingAiAgent || lobby?.status !== "waiting" || isLobbyFull || aiLimitReached;
+  const addAiDisabledReason = aiLimitReached
+    ? t("aiAgentLimitReached")
+    : isLobbyFull
+      ? t("lobbyFullMaxPlayers")
+      : "";
   const settingsDirty = useMemo(() => {
     if (!lobby?.settings || !draftSettings) return false;
     return JSON.stringify(lobby.settings) !== JSON.stringify(draftSettings);
@@ -248,11 +261,17 @@ export default function LobbyPage() {
   }
 
   function addAiAgent() {
+    const aiPassword = window.prompt(t("aiPasswordPrompt"), "");
+    if (aiPassword === null) {
+      setMessage(t("aiPasswordPromptCancelled"));
+      return;
+    }
+
     const socket = getSocket();
     setError("");
     setMessage("");
     setIsAddingAiAgent(true);
-    socket.emit("lobby:add-ai-agent", { lobbyId, playerId }, (ack) => {
+    socket.emit("lobby:add-ai-agent", { lobbyId, playerId, aiPassword }, (ack) => {
       setIsAddingAiAgent(false);
       if (!ack?.ok) {
         setError(ack?.error || "Could not add AI agent.");
@@ -346,14 +365,20 @@ export default function LobbyPage() {
         <div className="section-head" style={{ marginBottom: "14px" }}>
           <h2 style={{ marginBottom: 0 }}>{t("players")} ({lobby.players.length})</h2>
           {isHost && (
-            <button
-              type="button"
-              className="ghost"
-              onClick={addAiAgent}
-              disabled={isAddingAiAgent || lobby.status !== "waiting" || lobby.players.length >= 8}
-            >
-              {isAddingAiAgent ? t("addingAiAgent") : t("addAiAgent")}
-            </button>
+            <div style={{ display: "grid", justifyItems: "end", gap: "6px" }}>
+              <button
+                type="button"
+                className="ghost"
+                onClick={addAiAgent}
+                disabled={disableAddAiButton}
+                title={addAiDisabledReason || undefined}
+              >
+                {isAddingAiAgent ? t("addingAiAgent") : t("addAiAgent")}
+              </button>
+              {addAiDisabledReason && (
+                <span style={{ fontSize: "0.78rem", color: "var(--text-muted)" }}>{addAiDisabledReason}</span>
+              )}
+            </div>
           )}
         </div>
         <ul className="player-list">

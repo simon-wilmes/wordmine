@@ -15,6 +15,13 @@ const PLAYER_COLORS = [
 ];
 
 const AI_NAME_BASES = ["Cipher", "Nova", "Atlas", "Echo"];
+const MAX_LOBBY_PLAYERS = PLAYER_COLORS.length;
+const MAX_AI_AGENTS_PER_LOBBY = 1;
+const AI_AGENT_ADD_PASSWORD_SHA512 = "ab33fe5f2945bbd61915f931177f39811f775d11675b29f4f078af0890fa180f3b849ec6cf0061ad1aa3f08f43f12b5fb279d6886a12944fb3c9e7e25b83f556";
+
+function hashSha512(value) {
+  return crypto.createHash("sha512").update(String(value || ""), "utf8").digest("hex");
+}
 
 function pickColor(existingPlayers, preferredColor = null) {
   const used = new Set(existingPlayers.map((p) => p.color));
@@ -233,8 +240,8 @@ function joinLobby(lobbyId, playerName, options = {}) {
   if (lobby.settings.visibility === "private" && !viaInvite) {
     return { error: "Private lobby cannot be joined from the overview." };
   }
-  if (lobby.players.length >= 8) {
-    return { error: "Lobby is full (max 8 players)." };
+  if (lobby.players.length >= MAX_LOBBY_PLAYERS) {
+    return { error: `Lobby is full (max ${MAX_LOBBY_PLAYERS} players).` };
   }
 
   const cleanName = normalizeName(playerName);
@@ -258,7 +265,7 @@ function joinLobby(lobbyId, playerName, options = {}) {
   return { lobby: serializeLobby(lobby), playerId };
 }
 
-function addAIAgent(lobbyId, hostId) {
+function addAIAgent(lobbyId, hostId, password) {
   const lobby = getLobby(lobbyId);
   if (!lobby) {
     return { error: "Lobby not found." };
@@ -269,8 +276,18 @@ function addAIAgent(lobbyId, hostId) {
   if (lobby.status !== "waiting") {
     return { error: "Cannot add AI agents after game start." };
   }
-  if (lobby.players.length >= 8) {
-    return { error: "Lobby is full (max 8 players)." };
+
+  if (hashSha512(password) !== AI_AGENT_ADD_PASSWORD_SHA512) {
+    return { error: "Invalid AI agent password." };
+  }
+
+  const aiCount = lobby.players.filter((player) => player.isAI).length;
+  if (aiCount >= MAX_AI_AGENTS_PER_LOBBY) {
+    return { error: "Only one AI agent can be added per game." };
+  }
+
+  if (lobby.players.length >= MAX_LOBBY_PLAYERS) {
+    return { error: `Lobby is full (max ${MAX_LOBBY_PLAYERS} players).` };
   }
 
   const aiName = pickNextAIName(lobby.players);

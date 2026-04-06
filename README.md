@@ -19,7 +19,7 @@ Realtime multiplayer Codenames-inspired party game with private/public lobbies, 
 - Reconnect on page refresh (player identity stored in localStorage per lobby)
 - Persistent finished-game history per browser, shown on the landing page
 - Bilingual: board word language per lobby (`en`/`de`) + UI language toggle (`en`/`de`)
-- Optional AI clue agent (Claude Code CLI) that can be added by host in lobby
+- Optional AI clue agent (Claude Code CLI) that can be added by host in lobby (max 1 AI per game)
 
 ## Tech Stack
 
@@ -114,7 +114,8 @@ Flow per round:
 
 ## AI Clue Agent (Claude Code CLI)
 
-- Host can add one or more AI agents in the lobby via `Add AI Agent`
+- Host can add at most one AI agent in the lobby via `Add AI Agent`
+- `Add AI Agent` is password-protected; server verifies a SHA-512 hash before allowing the AI to be added
 - AI agents use deterministic AI-themed names (`Cipher`, `Nova`, `Atlas`, `Echo`, then numbered variants)
 - AI agents are clue-only in v1:
   - If AI is clue giver in standard mode, server auto-generates clue + targets
@@ -228,7 +229,7 @@ The same replay overview is also available on the final game overview screen (`G
 ## Lobby & Session Flow
 
 1. **Create lobby** (`POST /api/lobbies`) — body includes `name` (player), `visibility`, `lobbyName`, and `browserId`; returns `lobbyId` + `playerId` (host)
-2. **Join lobby** (`POST /api/lobbies/:id/join`) — body includes `name`, `viaInvite`, and `browserId`; returns `playerId` for the new player
+2. **Join lobby** (`POST /api/lobbies/:id/join`) — body includes `name`, `viaInvite`, and `browserId`; returns `playerId` for the new player (lobby hard limit: 8 players)
 3. **Connect socket** (`join-lobby` event) — joins the Socket.io room, marks player connected
 4. **Start game** (`start-game` event) — host only, requires 2+ players
 5. **Play** — game state pushed to each player via `game-state` with role-appropriate views

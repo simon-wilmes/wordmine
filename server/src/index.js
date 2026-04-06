@@ -1039,7 +1039,7 @@ io.on("connection", (socket) => {
   socket.on("lobby:add-ai-agent", (payload, ack) => {
     const lobbyId = payload?.lobbyId || socket.data.lobbyId;
     const playerId = payload?.playerId || socket.data.playerId;
-    const result = addAIAgent(lobbyId, playerId);
+    const result = addAIAgent(lobbyId, playerId, payload?.aiPassword || "");
 
     if (result.error) {
       logDebug("add-ai-agent failed", { socketId: socket.id, lobbyId, playerId, error: result.error });
