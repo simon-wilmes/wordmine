@@ -22,6 +22,7 @@ export default function LobbyPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
+  const [isAddingAiAgent, setIsAddingAiAgent] = useState(false);
   const [copiedInvite, setCopiedInvite] = useState(false);
   const [showUnsavedStartWarning, setShowUnsavedStartWarning] = useState(false);
   const [draftLobbyName, setDraftLobbyName] = useState("");
@@ -246,6 +247,21 @@ export default function LobbyPage() {
     });
   }
 
+  function addAiAgent() {
+    const socket = getSocket();
+    setError("");
+    setMessage("");
+    setIsAddingAiAgent(true);
+    socket.emit("lobby:add-ai-agent", { lobbyId, playerId }, (ack) => {
+      setIsAddingAiAgent(false);
+      if (!ack?.ok) {
+        setError(ack?.error || "Could not add AI agent.");
+        return;
+      }
+      setMessage("AI agent added.");
+    });
+  }
+
   function onStartGameClick() {
     if (settingsDirty) {
       setShowUnsavedStartWarning(true);
@@ -327,7 +343,19 @@ export default function LobbyPage() {
         {error && <p className="error">{error}</p>}
         {message && <p className="success">{message}</p>}
 
-        <h2 style={{ marginBottom: "14px" }}>{t("players")} ({lobby.players.length})</h2>
+        <div className="section-head" style={{ marginBottom: "14px" }}>
+          <h2 style={{ marginBottom: 0 }}>{t("players")} ({lobby.players.length})</h2>
+          {isHost && (
+            <button
+              type="button"
+              className="ghost"
+              onClick={addAiAgent}
+              disabled={isAddingAiAgent || lobby.status !== "waiting" || lobby.players.length >= 8}
+            >
+              {isAddingAiAgent ? t("addingAiAgent") : t("addAiAgent")}
+            </button>
+          )}
+        </div>
         <ul className="player-list">
           {lobby.players.map((player) => (
             <li
@@ -338,6 +366,7 @@ export default function LobbyPage() {
               <div className="agent-info">
                 <span className="agent-name" style={player.color ? { color: player.color } : undefined}>{player.name}</span>
                 {player.isHost && <span className="agent-role-tag">Handler</span>}
+                {player.isAI && <span className="agent-role-tag">{t("aiAgentTag")}</span>}
                 {player.id === playerId && <span className="agent-self-tag">{t("you")}</span>}
                 {!player.connected && <span className="agent-offline">{t("offline")}</span>}
               </div>

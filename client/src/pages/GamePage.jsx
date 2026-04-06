@@ -541,6 +541,16 @@ export default function GamePage() {
     });
   }
 
+  function readyNextPhase() {
+    if (!playerId) return;
+    setError("");
+    getSocket().emit("game:ready-next-phase", { lobbyId, playerId }, (ack) => {
+      if (!ack?.ok) {
+        setError(ack?.error || "Failed to continue.");
+      }
+    });
+  }
+
   function requestRematch() {
     const socket = getSocket();
     setError("");
@@ -801,6 +811,14 @@ export default function GamePage() {
     );
   }
 
+  const canContinueRoundEnd = Boolean(
+    playerId
+    && game?.phase === "round-end"
+    && game?.status !== "finished"
+    && myScoreRow
+    && !myScoreRow.isAI
+  );
+
   if (!game) {
     return (
       <main className="page">
@@ -907,7 +925,10 @@ export default function GamePage() {
           {scoreRows.map((row) => (
             <li key={row.playerId} className="score-row">
               <span className="score-rank" />
-              <span className="score-name" style={row.color ? { color: row.color } : undefined}>{row.name}</span>
+              <span className="score-name" style={row.color ? { color: row.color } : undefined}>
+                {row.name}
+                {row.isAI ? ` [${t("aiAgentTag")}]` : ""}
+              </span>
               <span className="score-pts">{row.total}</span>
             </li>
           ))}
@@ -943,6 +964,7 @@ export default function GamePage() {
               {game.phase !== "clue-all" && (
                 <span className="handler-badge">
                   {t("clueGiver")}: <span style={clueGiverColor ? { color: clueGiverColor } : undefined}>{game.clueGiver?.name}</span>
+                  {game.clueGiver?.isAI ? ` [${t("aiAgentTag")}]` : ""}
                 </span>
               )}
               {game.phase === "clue-all" && (
@@ -1175,16 +1197,31 @@ export default function GamePage() {
       </section>
 
       {/* BOTTOM — Clue bar (spans all columns) */}
-      {game.clue && (
+      {(game.clue || game.phase === "round-end") && (
         <section className="card clue-bar">
           <span className="clue-bar-label">Clue</span>
-          <span className="clue-bar-word">{game.clue}</span>
-          {isGuesser && (
+          <span className="clue-bar-word">{game.clue || "-"}</span>
+          {isGuesser && game.clue && (
             <span className="clue-bar-fraction">
               <span className="clue-bar-found">{foundCount}</span>
               <span className="clue-bar-sep"> / </span>
               <span className="clue-bar-total">{game.clueCount}</span>
             </span>
+          )}
+          {game.phase === "round-end" && game.roundEndReadyTarget > 0 && (
+            <span className="clue-bar-ready-progress">
+              {t("continueVotes")}: {game.roundEndReadyCount} / {game.roundEndReadyTarget}
+            </span>
+          )}
+          {canContinueRoundEnd && (
+            <button
+              type="button"
+              className="cta clue-bar-continue"
+              onClick={readyNextPhase}
+              disabled={game.myRoundEndReady}
+            >
+              {game.myRoundEndReady ? t("readyForNextPhase") : t("skipToNextSection")}
+            </button>
           )}
         </section>
       )}

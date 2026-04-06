@@ -14,6 +14,8 @@ const PLAYER_COLORS = [
   "#c8b632", // gold
 ];
 
+const AI_NAME_BASES = ["Cipher", "Nova", "Atlas", "Echo"];
+
 function pickColor(existingPlayers, preferredColor = null) {
   const used = new Set(existingPlayers.map((p) => p.color));
   if (preferredColor && !used.has(preferredColor)) {
@@ -72,9 +74,31 @@ function serializeLobby(lobby) {
       name: p.name,
       isHost: p.isHost,
       connected: p.connected,
-      color: p.color
+      color: p.color,
+      isAI: Boolean(p.isAI)
     }))
   };
+}
+
+function pickNextAIName(players) {
+  const used = new Set(players.map((p) => String(p.name || "").trim().toLowerCase()));
+
+  for (const base of AI_NAME_BASES) {
+    if (!used.has(base.toLowerCase())) {
+      return base;
+    }
+  }
+
+  for (let suffix = 2; suffix <= 99; suffix += 1) {
+    for (const base of AI_NAME_BASES) {
+      const candidate = `${base} ${suffix}`;
+      if (!used.has(candidate.toLowerCase())) {
+        return candidate;
+      }
+    }
+  }
+
+  return `AI Agent ${players.length + 1}`;
 }
 
 function getDefaultLobbySettings(visibility) {
@@ -131,6 +155,7 @@ function createLobby(hostName, visibility = "public", overrideSettings = null, l
         isHost: true,
         connected: false,
         color: pickColor([], preferredColor),
+        isAI: false,
         browserId: normalizeBrowserId(browserId)
       }
     ]
@@ -225,7 +250,39 @@ function joinLobby(lobbyId, playerName, options = {}) {
     isHost: false,
     connected: false,
     color: pickColor(lobby.players, preferredColor),
+    isAI: false,
     browserId: normalizeBrowserId(browserId)
+  });
+  lobby.updatedAt = nowIso();
+
+  return { lobby: serializeLobby(lobby), playerId };
+}
+
+function addAIAgent(lobbyId, hostId) {
+  const lobby = getLobby(lobbyId);
+  if (!lobby) {
+    return { error: "Lobby not found." };
+  }
+  if (lobby.hostId !== hostId) {
+    return { error: "Only the host can add AI agents." };
+  }
+  if (lobby.status !== "waiting") {
+    return { error: "Cannot add AI agents after game start." };
+  }
+  if (lobby.players.length >= 8) {
+    return { error: "Lobby is full (max 8 players)." };
+  }
+
+  const aiName = pickNextAIName(lobby.players);
+  const playerId = makeId();
+  lobby.players.push({
+    id: playerId,
+    name: aiName,
+    isHost: false,
+    connected: true,
+    color: pickColor(lobby.players),
+    isAI: true,
+    browserId: ""
   });
   lobby.updatedAt = nowIso();
 
@@ -465,6 +522,7 @@ module.exports = {
   listStartedPublicLobbies,
   markPlayerConnected,
   kickPlayer,
+  addAIAgent,
   removePlayer,
   removePlayerFromStartedLobby,
   startGame,

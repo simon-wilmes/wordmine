@@ -19,6 +19,7 @@ Realtime multiplayer Codenames-inspired party game with private/public lobbies, 
 - Reconnect on page refresh (player identity stored in localStorage per lobby)
 - Persistent finished-game history per browser, shown on the landing page
 - Bilingual: board word language per lobby (`en`/`de`) + UI language toggle (`en`/`de`)
+- Optional AI clue agent (Claude Code CLI) that can be added by host in lobby
 
 ## Tech Stack
 
@@ -109,6 +110,62 @@ Flow per round:
 5. Round ends when all targets found, all guessers finished (guess limit, red, or black), or timer expires
 6. If the guess timer expires, any still-active guessers are force-marked as finished with timeout status for that round
 7. Reveal phase shows the full board for a configurable pause, then next round
+8. During `MISSION DEBRIEF`, human players can press `Skip to Next Section`; once all non-AI players have pressed continue, the game advances immediately (AI agents are excluded from this vote)
+
+## AI Clue Agent (Claude Code CLI)
+
+- Host can add one or more AI agents in the lobby via `Add AI Agent`
+- AI agents use deterministic AI-themed names (`Cipher`, `Nova`, `Atlas`, `Echo`, then numbered variants)
+- AI agents are clue-only in v1:
+  - If AI is clue giver in standard mode, server auto-generates clue + targets
+  - If AI is guesser in standard mode, server auto-generates an ordered click plan from clue context
+- AI clue generation uses local Claude Code CLI (not paid API) with language-aware prompts:
+  - English prompt for `wordLanguage=en`
+  - German prompt for `wordLanguage=de`
+- Output is validated server-side against live board constraints
+- If invalid, server retries up to 3 times with corrective feedback
+- If still invalid after 3 tries, clue is skipped as if time ran out and round advances
+- AI clue reveal has a minimum delay of 5 seconds from clue-phase start (human-like pacing)
+- AI guesser behavior:
+  - Returns ordered words to click by likelihood
+  - Can stop early by returning fewer guesses
+  - On non-target green clicks, receives feedback and can re-plan remaining guesses
+  - Parsing/planning failures are retried up to 3 times per AI guesser per round
+  - After retry limit, AI guesser stops for that round
+
+### Claude CLI Setup
+
+The server expects a local Claude Code CLI command to be available on the host machine.
+
+If you deploy with `deploy-pi.sh`, the script now:
+
+- Installs Claude Code CLI automatically if `claude` is missing
+- Verifies Claude authentication for the runtime Linux user (`codename`)
+- Stops deployment with login instructions if that user is not authenticated
+
+Manual login command on the Pi:
+
+```bash
+sudo -u codename -H claude auth login
+```
+
+Optional environment variables:
+
+- `CLAUDE_CLI_COMMAND` (default: `claude`)
+- `CLAUDE_CLI_ARGS_JSON` (JSON array; default: `["-p","{prompt}"]`)
+- `CLAUDE_CLI_TIMEOUT_MS` (default: `20000`)
+
+### AI Logging
+
+For each AI clue attempt, server logs include:
+
+- Prompt metadata (`lobbyId`, round, clue giver, language, attempt, latency)
+- Full prompt text (verbatim)
+- Raw Claude output (verbatim)
+- Parsed JSON output and validation status
+- Retry/failure reason and final status (`submitted` or `skipped_after_retries`)
+
+Note: logs can contain live board words and clues.
 
 ### Scoring
 
@@ -210,6 +267,7 @@ A persistent browser-scoped `browserId` is also stored in `localStorage` and use
 | `update-settings` | Host updates lobby settings |
 | `update-lobby-name` | Host renames the lobby |
 | `start-game` | Host starts the game |
+| `lobby:add-ai-agent` | Host adds an AI agent player while lobby is waiting |
 | `kick-player` | Host kicks a player |
 | `game:get-state` | Request current game view |
 | `game:submit-clue` | Submit clue word + selected card indexes |
@@ -287,6 +345,7 @@ Global toggle in top-right corner. Switches all interface text between English a
 - **Player can't rejoin after refresh** — Check that `localStorage` has the `lobbyPlayers` entry for that lobby. The server keeps the player slot on disconnect; only explicit `leave-lobby` removes it.
 - **Past games missing** — Check that `localStorage` still contains the same `browserId`; clearing site storage creates a new browser identity.
 - **Game state not updating** — Verify the socket is connected and joined to the correct lobby room. Check browser console for socket errors.
+- **Deploy fails with Claude login error** — The `codename` runtime user is not authenticated for Claude Code yet. Run `sudo -u codename -H claude auth login` on the Pi, finish login, then rerun `deploy-pi.sh`.
 
 ## Notes
 

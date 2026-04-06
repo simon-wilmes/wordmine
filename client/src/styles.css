@@ -1779,6 +1779,23 @@ small {
   color: var(--text-muted);
 }
 
+.clue-bar-ready-progress {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  letter-spacing: 0.04em;
+}
+
+.clue-bar-continue {
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+.clue-bar-continue:disabled {
+  opacity: 0.7;
+  cursor: default;
+}
+
 /* ============================================================
    REPLAY TIMELINE + POPUP
    ============================================================ */
@@ -2046,6 +2063,10 @@ small {
 
   .clue-bar {
     order: 4;
+  }
+
+  .clue-bar-continue {
+    margin-left: 0;
   }
 
   .replay-timeline-shell {

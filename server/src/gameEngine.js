@@ -201,13 +201,14 @@ function buildRoundState(game) {
     guessers,
     clueGiverId,
     guesserIds,
+    roundEndReadyByPlayerId: {},
     phase: "clue",
     phaseStartedAt: Date.now()
   };
 
   if (game.config?.simultaneousClue) {
     const cluePhaseSeconds = Number(game.config?.cluePhaseSeconds || 0);
-    return {
+    const roundState = {
       ...baseRound,
       simultaneousMode: true,
       submittedClues: {},
@@ -217,6 +218,7 @@ function buildRoundState(game) {
       activeClueGiverIds: [],
       phase: "clue-all"
     };
+    return roundState;
   }
 
   return baseRound;
@@ -361,6 +363,7 @@ function startGame(lobby) {
       id: p.id,
       name: p.name,
       color: p.color,
+      isAI: Boolean(p.isAI),
       browserId: p.browserId || ""
     })),
     clueOrder,
@@ -1088,6 +1091,7 @@ function finishRound(game) {
   round.phase = "round-end";
   round.phaseStartedAt = Date.now();
   round.roundEndEndsAt = round.phaseStartedAt + (game.config?.betweenRoundsSeconds || 15) * 1000;
+  round.roundEndReadyByPlayerId = {};
   const roundDelta = computeRoundScores(game);
   const breakdown = buildScoreBreakdown(game, round);
   const snapshot = buildRoundSnapshot(game, round, roundDelta, breakdown);
@@ -1101,6 +1105,40 @@ function finishRound(game) {
   }
 
   return { ok: true, roundDelta };
+}
+
+function markPlayerReadyForNextPhase(game, playerId) {
+  if (!game) return { error: "Game not found." };
+  if (!ensurePlayer(game, playerId)) return { error: "Player is not part of this game." };
+
+  const round = getRound(game);
+  if (!round || round.phase !== "round-end") {
+    return { error: "Continue is only available during mission debrief." };
+  }
+
+  const player = game.players.find((p) => p.id === playerId);
+  if (player?.isAI) {
+    return { error: "AI players are excluded from continue voting." };
+  }
+
+  if (!round.roundEndReadyByPlayerId) {
+    round.roundEndReadyByPlayerId = {};
+  }
+
+  round.roundEndReadyByPlayerId[playerId] = true;
+
+  const humanPlayerIds = game.players.filter((p) => !p.isAI).map((p) => p.id);
+  const readyCount = humanPlayerIds.filter((id) => round.roundEndReadyByPlayerId[id]).length;
+  const readyTarget = humanPlayerIds.length;
+  const allReady = readyTarget > 0 && readyCount >= readyTarget;
+
+  return {
+    ok: true,
+    allReady,
+    readyCount,
+    readyTarget,
+    myReady: Boolean(round.roundEndReadyByPlayerId[playerId])
+  };
 }
 
 function advanceRound(game) {
@@ -1195,6 +1233,7 @@ function getGameViewForPlayer(game, playerId) {
       playerId: gid,
       name: player?.name || gid,
       color: player?.color || null,
+      isAI: Boolean(player?.isAI),
       correctCount: g.guessedCorrect.length,
       neutralCount: g.guessedNeutral.length,
       redCount: g.guessedWrongRed.length,
@@ -1244,6 +1283,7 @@ function getGameViewForPlayer(game, playerId) {
           playerId: gid,
           name: player?.name || gid,
           color: player?.color || null,
+          isAI: Boolean(player?.isAI),
           marks: [...g.marks],
           guessedCorrect: [...g.guessedCorrect],
           guessedWrong: [...g.guessedWrong],
@@ -1260,6 +1300,7 @@ function getGameViewForPlayer(game, playerId) {
     playerId: p.id,
     name: p.name,
     color: p.color || null,
+    isAI: Boolean(p.isAI),
     total: game.scores[p.id].total
   }));
 
@@ -1281,6 +1322,11 @@ function getGameViewForPlayer(game, playerId) {
     };
   });
 
+  const humanPlayerIds = game.players.filter((p) => !p.isAI).map((p) => p.id);
+  const roundEndReadyByPlayerId = round.roundEndReadyByPlayerId || {};
+  const roundEndReadyCount = humanPlayerIds.filter((id) => roundEndReadyByPlayerId[id]).length;
+  const roundEndReadyTarget = humanPlayerIds.length;
+
   return {
     lobbyId: game.lobbyId,
     gameId: game.id,
@@ -1293,7 +1339,8 @@ function getGameViewForPlayer(game, playerId) {
     clueGiver: {
       id: round.clueGiverId,
       name: clueGiver?.name || "Unknown",
-      color: clueGiver?.color || null
+      color: clueGiver?.color || null,
+      isAI: Boolean(clueGiver?.isAI)
     },
     clue: round.clue,
     clueCount: round.clueCount,
@@ -1304,6 +1351,9 @@ function getGameViewForPlayer(game, playerId) {
         : [],
     guessEndsAt: round.guessEndsAt,
     roundEndEndsAt: round.roundEndEndsAt,
+    roundEndReadyCount,
+    roundEndReadyTarget,
+    myRoundEndReady: Boolean(roundEndReadyByPlayerId[playerId]),
     phaseStartedAt: round.phaseStartedAt,
     cards,
     scores,
@@ -1354,5 +1404,6 @@ module.exports = {
   appendChatMessage,
   registerChatSend,
   clearGameTimers,
-  removePlayerFromActiveGame
+  removePlayerFromActiveGame,
+  markPlayerReadyForNextPhase
 };

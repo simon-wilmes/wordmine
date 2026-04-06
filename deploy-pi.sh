@@ -7,6 +7,7 @@ set -euo pipefail
 APP_NAME="codename-competition"
 APP_DIR="/opt/$APP_NAME"
 APP_USER="codename"
+APP_USER_HOME="/home/$APP_USER"
 NODE_VERSION="20"
 PORT=3001
 
@@ -31,10 +32,28 @@ fi
 
 echo "Node: $(node -v)  npm: $(npm -v)"
 
-# --- Create app user (no login shell) ---
+# --- Install Claude Code CLI if missing ---
+if ! command -v claude &>/dev/null; then
+  echo "=== Installing Claude Code CLI ==="
+  npm install -g @anthropic-ai/claude-code
+else
+  echo "=== Claude Code CLI already installed ==="
+fi
+
+if ! command -v claude &>/dev/null; then
+  echo "ERROR: Claude Code CLI installation failed (command 'claude' not found)."
+  exit 1
+fi
+
+# --- Create app user (with home directory for Claude credentials) ---
 if ! id "$APP_USER" &>/dev/null; then
   echo "=== Creating user $APP_USER ==="
-  useradd --system --no-create-home --shell /usr/sbin/nologin "$APP_USER"
+  useradd --system --create-home --home-dir "$APP_USER_HOME" --shell /bin/bash "$APP_USER"
+fi
+
+if [[ ! -d "$APP_USER_HOME" ]]; then
+  mkdir -p "$APP_USER_HOME"
+  chown "$APP_USER":"$APP_USER" "$APP_USER_HOME"
 fi
 
 # --- Copy project files ---
@@ -67,6 +86,17 @@ rm -rf "$APP_DIR/client/node_modules"
 
 # --- Fix ownership ---
 chown -R "$APP_USER":"$APP_USER" "$APP_DIR"
+
+# --- Verify Claude login for runtime user ---
+echo "=== Checking Claude login for user $APP_USER ==="
+if ! sudo -u "$APP_USER" -H bash -lc "claude auth status" >/dev/null 2>&1; then
+  echo ""
+  echo "ERROR: Claude Code is not logged in for user '$APP_USER'."
+  echo "Run the following command on the Pi, complete login, then rerun this deploy script:"
+  echo "  sudo -u $APP_USER -H claude auth login"
+  echo ""
+  exit 1
+fi
 
 # --- Create systemd service ---
 echo "=== Creating systemd service ==="

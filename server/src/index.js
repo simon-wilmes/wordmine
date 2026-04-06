@@ -5,6 +5,7 @@ const path = require("path");
 const { Server } = require("socket.io");
 const {
   createLobby,
+  addAIAgent,
   getLobby,
   getSerializedLobby,
   joinLobby,
@@ -35,7 +36,8 @@ const {
   validateChatMessage,
   appendChatMessage,
   registerChatSend,
-  removePlayerFromActiveGame
+  removePlayerFromActiveGame,
+  markPlayerReadyForNextPhase
 } = require("./gameEngine");
 const {
   archiveFinishedGame,
@@ -44,25 +46,54 @@ const {
   listHistoryForBrowser,
   pruneExpiredGames
 } = require("./persistence");
+const { generateAIAgentClueAttempt, generateAIAgentGuessPlan } = require("./llmClueService");
 
 const PORT = process.env.PORT || 3001;
 const GAME_NAME = process.env.GAME_NAME || "wordmine";
 const HISTORY_RETENTION_DAYS = Number(process.env.GAME_HISTORY_RETENTION_DAYS || 90);
 const HISTORY_PRUNE_INTERVAL_MS = 6 * 60 * 60 * 1000;
-const DEBUG = true;
+const DEBUG = String(process.env.SERVER_DEBUG || "false").toLowerCase() === "true";
+const HTTP_DEBUG_THROTTLE_MS = Number(process.env.SERVER_DEBUG_HTTP_THROTTLE_MS || 20000);
 const app = express();
 const gameRouter = express.Router();
 const clientDist = path.resolve(__dirname, "../../client/dist");
+const httpDebugLastLogAt = new Map();
 
 function logDebug(message, payload) {
   if (!DEBUG) return;
   console.log(`[server-debug] ${message}`, payload ?? "");
 }
 
+function logHttpDebug(method, pathName, payload) {
+  if (!DEBUG) return;
+  const key = `${String(method || "").toUpperCase()} ${pathName}`;
+  const now = Date.now();
+  const lastAt = httpDebugLastLogAt.get(key) || 0;
+  if (now - lastAt < Math.max(0, HTTP_DEBUG_THROTTLE_MS)) {
+    return;
+  }
+  httpDebugLastLogAt.set(key, now);
+  console.log(`[server-debug] HTTP ${key}`, payload ?? {});
+}
+
+function logLLM(message, payload) {
+  console.log(`[llm-clue] ${message}`, payload ?? "");
+}
+
+function logLLMText(title, value) {
+  const text = String(value || "");
+  console.log(`[llm-clue] ${title}\n${text}`);
+}
+
+function sleep(ms) {
+  if (!ms || ms <= 0) return Promise.resolve();
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 app.use(cors());
 app.use(express.json());
 app.use((req, _res, next) => {
-  logDebug(`HTTP ${req.method} ${req.path}`, req.body || {});
+  logHttpDebug(req.method, req.path, req.body || {});
   next();
 });
 
@@ -264,6 +295,462 @@ async function archiveFinishedGameForLobby(lobbyId) {
   }
 }
 
+function isAIGiverTurn(game) {
+  const round = game?.round;
+  if (!game || !round || round.phase !== "clue") return false;
+  if (game.config?.simultaneousClue) return false;
+  const clueGiver = game.players.find((p) => p.id === round.clueGiverId);
+  return Boolean(clueGiver?.isAI);
+}
+
+function getAIGuesserIds(game) {
+  const round = game?.round;
+  if (!game || !round || round.phase !== "guess") return [];
+  return round.guesserIds.filter((id) => {
+    const player = game.players.find((p) => p.id === id);
+    const guesser = round.guessers?.[id];
+    return Boolean(player?.isAI && guesser && !guesser.finished);
+  });
+}
+
+function formatGuesserHistory(round) {
+  if (!round?.board?.cards) return "";
+  const cardByIndex = new Map(round.board.cards.map((card) => [card.index, card]));
+  const entries = [];
+  for (const idx of round?.clueSelectedIndexes || []) {
+    const card = cardByIndex.get(idx);
+    if (card) entries.push(`${card.word}: target-green`);
+  }
+  return entries.join(", ");
+}
+
+function formatOwnClicks(round, guesserId) {
+  const guesser = round?.guessers?.[guesserId];
+  if (!guesser) return "none";
+  const cardByIndex = new Map((round?.board?.cards || []).map((card) => [card.index, card]));
+  const out = [];
+  for (const idx of guesser.guessedCorrect || []) {
+    const card = cardByIndex.get(idx);
+    if (card) out.push(`${card.word}: target-green`);
+  }
+  for (const idx of guesser.guessedNeutral || []) {
+    const card = cardByIndex.get(idx);
+    if (card) out.push(`${card.word}: non-target-green`);
+  }
+  for (const idx of guesser.guessedWrongRed || []) {
+    const card = cardByIndex.get(idx);
+    if (card) out.push(`${card.word}: red`);
+  }
+  for (const idx of guesser.guessedWrongBlack || []) {
+    const card = cardByIndex.get(idx);
+    if (card) out.push(`${card.word}: black`);
+  }
+  return out.length > 0 ? out.join(", ") : "none";
+}
+
+function setAIGuesserStop(round, guesserId, reason = "ai-stop") {
+  const guesser = round?.guessers?.[guesserId];
+  if (!guesser || guesser.finished) return;
+  guesser.finished = true;
+  guesser.finishReason = reason;
+}
+
+function clearClueTimersForGame(game) {
+  if (!game?.timers) return;
+  if (game.timers.clue) {
+    clearTimeout(game.timers.clue);
+    game.timers.clue = null;
+  }
+  if (game.timers.clueGrace) {
+    clearTimeout(game.timers.clueGrace);
+    game.timers.clueGrace = null;
+  }
+}
+
+async function runAIAgentClueTurn(lobbyId) {
+  const game = getGame(lobbyId);
+  if (!isAIGiverTurn(game)) return;
+  const round = game.round;
+  if (round.aiClueInProgress || round.aiClueResolved) return;
+
+  round.aiClueInProgress = true;
+  const maxAttempts = 3;
+  let previousError = "";
+
+  try {
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      const liveGame = getGame(lobbyId);
+      if (!liveGame || liveGame.round !== round || !isAIGiverTurn(liveGame)) {
+        return;
+      }
+
+      let proposal;
+      try {
+        proposal = await generateAIAgentClueAttempt({
+          game: liveGame,
+          lobbyId,
+          attempt,
+          previousError
+        });
+      } catch (error) {
+        previousError = error?.message || "Claude CLI call failed.";
+        logLLM("attempt failed before parse", {
+          lobbyId,
+          roundNumber: liveGame.roundNumber,
+          attempt,
+          error: previousError,
+          code: error?.code || null
+        });
+        continue;
+      }
+
+      logLLM("attempt meta", proposal.meta);
+      logLLMText(`prompt attempt ${attempt}`, proposal.prompt);
+      logLLMText(`raw output attempt ${attempt}`, proposal.rawOutput);
+      logLLM("parsed attempt", proposal.parsed);
+
+      if (!proposal.ok) {
+        previousError = proposal.error;
+        logLLM("attempt rejected", {
+          lobbyId,
+          roundNumber: liveGame.roundNumber,
+          attempt,
+          reason: proposal.error,
+          status: "invalid-proposal"
+        });
+        continue;
+      }
+
+      logLLM("submit payload", {
+        lobbyId,
+        roundNumber: liveGame.roundNumber,
+        attempt,
+        clue: proposal.payload.clue,
+        clueCount: proposal.payload.clueCount,
+        selectedIndexes: proposal.payload.selectedIndexes
+      });
+
+      const minRevealAt = Number(liveGame.round?.phaseStartedAt || Date.now()) + 5000;
+      const delayMs = Math.max(0, minRevealAt - Date.now());
+      if (delayMs > 0) {
+        logLLM("minimum clue delay", {
+          lobbyId,
+          roundNumber: liveGame.roundNumber,
+          waitMs: delayMs,
+          status: "waiting-before-reveal"
+        });
+        await sleep(delayMs);
+      }
+
+      const latestBeforeSubmit = getGame(lobbyId);
+      if (!latestBeforeSubmit || latestBeforeSubmit.round !== round || latestBeforeSubmit.round.phase !== "clue") {
+        return;
+      }
+
+      const delayedSubmit = submitClue(latestBeforeSubmit, latestBeforeSubmit.round.clueGiverId, proposal.payload);
+      if (delayedSubmit.error) {
+        previousError = delayedSubmit.error;
+        logLLM("attempt rejected by game engine after delay", {
+          lobbyId,
+          roundNumber: latestBeforeSubmit.roundNumber,
+          attempt,
+          reason: delayedSubmit.error,
+          status: "engine-rejected-after-delay"
+        });
+        continue;
+      }
+
+      clearClueTimersForGame(latestBeforeSubmit);
+      scheduleGuessTimer(lobbyId);
+      round.aiClueResolved = true;
+      logLLM("final status", {
+        lobbyId,
+        roundNumber: liveGame.roundNumber,
+        attempt,
+        status: "submitted"
+      });
+      await emitGameStateToLobby(lobbyId);
+      return;
+    }
+
+    const latest = getGame(lobbyId);
+    if (!latest || latest.round !== round || latest.round.phase !== "clue") {
+      return;
+    }
+
+    clearClueTimersForGame(latest);
+    finishRound(latest);
+    scheduleRoundEndTimer(lobbyId);
+    round.aiClueResolved = true;
+    logLLM("final status", {
+      lobbyId,
+      roundNumber: latest.roundNumber,
+      status: "skipped_after_retries",
+      lastError: previousError || null
+    });
+    await emitGameStateToLobby(lobbyId);
+  } finally {
+    round.aiClueInProgress = false;
+  }
+}
+
+async function runSingleAIGuesserTurn(lobbyId, guesserId) {
+  const game = getGame(lobbyId);
+  if (!game?.round || game.round.phase !== "guess") return { roundEnded: false };
+  const round = game.round;
+  const guesser = round.guessers?.[guesserId];
+  if (!guesser || guesser.finished) return { roundEnded: false };
+
+  round.aiGuessersInProgress = round.aiGuessersInProgress || {};
+  if (round.aiGuessersInProgress[guesserId]) {
+    return { roundEnded: false };
+  }
+  round.aiGuessersInProgress[guesserId] = true;
+
+  let feedback = "";
+  let previousError = "";
+  const maxGuessRetries = 3;
+  round.aiGuessRetryCounts = round.aiGuessRetryCounts || {};
+  let retryCount = Number(round.aiGuessRetryCounts[guesserId] || 0);
+
+  try {
+    while (true) {
+      const liveGame = getGame(lobbyId);
+      if (!liveGame?.round || liveGame.round !== round || liveGame.round.phase !== "guess") {
+        return { roundEnded: false };
+      }
+      const liveGuesser = liveGame.round.guessers?.[guesserId];
+      if (!liveGuesser || liveGuesser.finished) {
+        return { roundEnded: false };
+      }
+
+      if (retryCount >= maxGuessRetries) {
+        setAIGuesserStop(round, guesserId, "ai-plan-failed");
+        logLLM("ai guesser stopped", {
+          lobbyId,
+          roundNumber: liveGame.roundNumber,
+          guesserId,
+          reason: "retry-limit-reached",
+          retries: retryCount
+        });
+        await emitGameStateToLobby(lobbyId);
+        return { roundEnded: false };
+      }
+
+      const attempt = retryCount + 1;
+      let plan;
+      try {
+        plan = await generateAIAgentGuessPlan({
+          game: liveGame,
+          lobbyId,
+          guesserId,
+          attempt,
+          previousError,
+          feedback
+        });
+      } catch (error) {
+        retryCount += 1;
+        round.aiGuessRetryCounts[guesserId] = retryCount;
+        previousError = error?.message || "Guess planning call failed.";
+        logLLM("guess planning call failed", {
+          lobbyId,
+          roundNumber: liveGame.roundNumber,
+          guesserId,
+          attempt,
+          retriesUsed: retryCount,
+          reason: previousError,
+          code: error?.code || null
+        });
+        continue;
+      }
+
+      logLLM("guess plan meta", plan.meta);
+      logLLMText(`guess prompt attempt ${attempt} for ${guesserId}`, plan.prompt);
+      logLLMText(`guess raw output attempt ${attempt} for ${guesserId}`, plan.rawOutput);
+      logLLM("guess parsed attempt", plan.parsed);
+
+      if (!plan.ok) {
+        retryCount += 1;
+        round.aiGuessRetryCounts[guesserId] = retryCount;
+        previousError = plan.error;
+        const parsingIssue = /json|parse|output/i.test(String(plan.error || ""));
+        logLLM("guess plan rejected", {
+          lobbyId,
+          roundNumber: liveGame.roundNumber,
+          guesserId,
+          attempt,
+          retriesUsed: retryCount,
+          reason: plan.error,
+          parsingIssue
+        });
+        continue;
+      }
+
+      if (!Array.isArray(plan.orderedIndexes) || plan.orderedIndexes.length === 0) {
+        setAIGuesserStop(round, guesserId, "ai-stop");
+        logLLM("ai guesser stopped", {
+          lobbyId,
+          roundNumber: liveGame.roundNumber,
+          guesserId,
+          reason: "empty-plan"
+        });
+        await emitGameStateToLobby(lobbyId);
+        return { roundEnded: false };
+      }
+
+      let needsReplanAfterNeutral = false;
+      for (const idx of plan.orderedIndexes) {
+        const currentGame = getGame(lobbyId);
+        if (!currentGame?.round || currentGame.round !== round || currentGame.round.phase !== "guess") {
+          return { roundEnded: false };
+        }
+        const currentGuesser = currentGame.round.guessers?.[guesserId];
+        if (!currentGuesser || currentGuesser.finished) {
+          return { roundEnded: false };
+        }
+
+        const card = currentGame.round.board.cards[idx];
+        const result = guessCard(currentGame, guesserId, idx);
+        if (result.error) {
+          logLLM("ai guess click skipped", {
+            lobbyId,
+            roundNumber: currentGame.roundNumber,
+            guesserId,
+            cardIndex: idx,
+            reason: result.error
+          });
+          continue;
+        }
+
+        logLLM("ai guess click", {
+          lobbyId,
+          roundNumber: currentGame.roundNumber,
+          guesserId,
+          cardIndex: idx,
+          word: card?.word || null,
+          outcome: result.outcome
+        });
+        await emitGameStateToLobby(lobbyId);
+
+        if (shouldEndRound(currentGame)) {
+          markTimedOutGuessers(currentGame);
+          finishRound(currentGame);
+          clearGameTimers(currentGame);
+          scheduleRoundEndTimer(lobbyId);
+          await emitGameStateToLobby(lobbyId);
+          return { roundEnded: true };
+        }
+
+        if (result.outcome === "neutral") {
+          const ownClicks = formatOwnClicks(currentGame.round, guesserId);
+          feedback = [
+            `Your latest click '${card?.word || idx}' was non-target green.`,
+            `Your clicks so far: ${ownClicks}.`,
+            `Current target clue cards: ${formatGuesserHistory(currentGame.round)}.`,
+            "Update your remaining ordered guesses."
+          ].join(" ");
+          needsReplanAfterNeutral = true;
+          logLLM("ai guess neutral feedback", {
+            lobbyId,
+            roundNumber: currentGame.roundNumber,
+            guesserId,
+            feedback
+          });
+          break;
+        }
+
+        if (result.outcome === "red" || result.outcome === "black") {
+          break;
+        }
+      }
+
+      const afterPlanGame = getGame(lobbyId);
+      if (!afterPlanGame?.round || afterPlanGame.round !== round || afterPlanGame.round.phase !== "guess") {
+        return { roundEnded: false };
+      }
+      const afterPlanGuesser = afterPlanGame.round.guessers?.[guesserId];
+      if (!afterPlanGuesser || afterPlanGuesser.finished) {
+        return { roundEnded: false };
+      }
+
+      if (needsReplanAfterNeutral) {
+        continue;
+      }
+
+      // AI returned a finite list; stopping here mirrors a human choosing to stop guessing.
+      setAIGuesserStop(round, guesserId, "ai-stop");
+      logLLM("ai guesser stopped", {
+        lobbyId,
+        roundNumber: afterPlanGame.roundNumber,
+        guesserId,
+        reason: "plan-exhausted"
+      });
+      await emitGameStateToLobby(lobbyId);
+      return { roundEnded: false };
+    }
+  } finally {
+    if (round.aiGuessersInProgress) {
+      round.aiGuessersInProgress[guesserId] = false;
+    }
+  }
+}
+
+async function runAIGuesserTurns(lobbyId) {
+  const game = getGame(lobbyId);
+  if (!game?.round || game.round.phase !== "guess") return;
+  const round = game.round;
+  if (round.aiGuessCycleInProgress) return;
+  round.aiGuessCycleInProgress = true;
+
+  try {
+    const guesserIds = getAIGuesserIds(game);
+    for (const guesserId of guesserIds) {
+      const result = await runSingleAIGuesserTurn(lobbyId, guesserId);
+      if (result.roundEnded) {
+        return;
+      }
+      const live = getGame(lobbyId);
+      if (!live?.round || live.round !== round || live.round.phase !== "guess") {
+        return;
+      }
+    }
+
+    const latest = getGame(lobbyId);
+    if (latest?.round && latest.round === round && latest.round.phase === "guess" && shouldEndRound(latest)) {
+      markTimedOutGuessers(latest);
+      finishRound(latest);
+      clearGameTimers(latest);
+      scheduleRoundEndTimer(lobbyId);
+      await emitGameStateToLobby(lobbyId);
+    }
+  } finally {
+    round.aiGuessCycleInProgress = false;
+  }
+}
+
+function triggerAIGuessersIfNeeded(lobbyId) {
+  const game = getGame(lobbyId);
+  if (!game?.round || game.round.phase !== "guess") return;
+  if (getAIGuesserIds(game).length === 0) return;
+  runAIGuesserTurns(lobbyId).catch((error) => {
+    logLLM("unexpected ai guesser failure", {
+      lobbyId,
+      error: error?.message || String(error)
+    });
+  });
+}
+
+function triggerAIAgentClueIfNeeded(lobbyId) {
+  const game = getGame(lobbyId);
+  if (!isAIGiverTurn(game)) return;
+  runAIAgentClueTurn(lobbyId).catch((error) => {
+    logLLM("unexpected runner failure", {
+      lobbyId,
+      error: error?.message || String(error)
+    });
+  });
+}
+
 function scheduleGuessTimer(lobbyId) {
   const game = getGame(lobbyId);
   if (!game || !game.round || game.round.phase !== "guess") {
@@ -285,6 +772,8 @@ function scheduleGuessTimer(lobbyId) {
     scheduleRoundEndTimer(lobbyId);
     await emitGameStateToLobby(lobbyId);
   }, waitMs);
+
+  triggerAIGuessersIfNeeded(lobbyId);
 }
 
 function scheduleClueTimer(lobbyId) {
@@ -299,6 +788,7 @@ function scheduleClueTimer(lobbyId) {
 
   // 0 means unlimited clue time.
   if ((game.config?.cluePhaseSeconds || 0) <= 0) {
+    triggerAIAgentClueIfNeeded(lobbyId);
     return;
   }
 
@@ -322,6 +812,8 @@ function scheduleClueTimer(lobbyId) {
       await emitGameStateToLobby(lobbyId);
     }, 5000);
   }, Math.max(0, game.config.cluePhaseSeconds * 1000));
+
+  triggerAIAgentClueIfNeeded(lobbyId);
 }
 
 function scheduleClueAllTimer(lobbyId) {
@@ -359,27 +851,31 @@ function scheduleRoundEndTimer(lobbyId) {
 
   const waitMs = Math.max(0, (game.round.roundEndEndsAt || Date.now()) - Date.now());
   game.timers.roundEnd = setTimeout(async () => {
-    const liveGame = getGame(lobbyId);
-    if (!liveGame || !liveGame.round || liveGame.round.phase !== "round-end") {
-      return;
-    }
+    await advanceFromRoundEnd(lobbyId);
+  }, waitMs);
+}
 
-    const result = advanceRound(liveGame);
-    if (result.error || result.finishedGame) {
-      if (result.finishedGame) {
-        await archiveFinishedGameForLobby(lobbyId);
-      }
-      await emitGameStateToLobby(lobbyId);
-      return;
-    }
+async function advanceFromRoundEnd(lobbyId) {
+  const liveGame = getGame(lobbyId);
+  if (!liveGame || !liveGame.round || liveGame.round.phase !== "round-end") {
+    return;
+  }
 
-    if (result.newBoard === false) {
-      scheduleGuessTimer(lobbyId);
-    } else {
-      scheduleClueTimer(lobbyId);
+  const result = advanceRound(liveGame);
+  if (result.error || result.finishedGame) {
+    if (result.finishedGame) {
+      await archiveFinishedGameForLobby(lobbyId);
     }
     await emitGameStateToLobby(lobbyId);
-  }, waitMs);
+    return;
+  }
+
+  if (result.newBoard === false) {
+    scheduleGuessTimer(lobbyId);
+  } else {
+    scheduleClueTimer(lobbyId);
+  }
+  await emitGameStateToLobby(lobbyId);
 }
 
 io.on("connection", (socket) => {
@@ -540,6 +1036,22 @@ io.on("connection", (socket) => {
     if (ack) ack({ ok: true, lobby: result.lobby });
   });
 
+  socket.on("lobby:add-ai-agent", (payload, ack) => {
+    const lobbyId = payload?.lobbyId || socket.data.lobbyId;
+    const playerId = payload?.playerId || socket.data.playerId;
+    const result = addAIAgent(lobbyId, playerId);
+
+    if (result.error) {
+      logDebug("add-ai-agent failed", { socketId: socket.id, lobbyId, playerId, error: result.error });
+      if (ack) ack({ ok: false, error: result.error });
+      return;
+    }
+
+    logDebug("add-ai-agent success", { socketId: socket.id, lobbyId, playerId, aiPlayerId: result.playerId });
+    io.to(lobbyId).emit("lobby-updated", result.lobby);
+    if (ack) ack({ ok: true, lobby: result.lobby, playerId: result.playerId });
+  });
+
   socket.on("start-game", (payload, ack) => {
     const lobbyId = payload?.lobbyId || socket.data.lobbyId;
     const playerId = payload?.playerId || socket.data.playerId;
@@ -692,6 +1204,30 @@ io.on("connection", (socket) => {
 
     await emitGameStateToLobby(lobbyId);
     if (ack) ack({ ok: true, outcome: result.outcome });
+  });
+
+  socket.on("game:ready-next-phase", async (payload, ack) => {
+    const lobbyId = payload?.lobbyId || socket.data.lobbyId;
+    const playerId = payload?.playerId || socket.data.playerId;
+    const game = getGame(lobbyId);
+    const result = markPlayerReadyForNextPhase(game, playerId);
+    if (result.error) {
+      if (ack) ack({ ok: false, error: result.error });
+      return;
+    }
+
+    if (result.allReady) {
+      if (game?.timers?.roundEnd) {
+        clearTimeout(game.timers.roundEnd);
+        game.timers.roundEnd = null;
+      }
+      await advanceFromRoundEnd(lobbyId);
+      if (ack) ack({ ok: true, advanced: true, readyCount: result.readyCount, readyTarget: result.readyTarget });
+      return;
+    }
+
+    await emitGameStateToLobby(lobbyId);
+    if (ack) ack({ ok: true, advanced: false, readyCount: result.readyCount, readyTarget: result.readyTarget });
   });
 
   socket.on("game:request-rematch", async (payload, ack) => {
