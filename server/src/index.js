@@ -116,7 +116,10 @@ app.use((req, _res, next) => {
 });
 
 // Canonicalize the game base URL so clients always load from /<game>/.
-app.get(`/${GAME_NAME}`, (req, res) => {
+// Express non-strict routing matches both /wordmine and /wordmine/ for this route,
+// so guard against redirecting when the trailing slash is already present.
+app.get(`/${GAME_NAME}`, (req, res, next) => {
+  if (req.path.endsWith("/")) return next();
   const query = req.url.includes("?") ? req.url.slice(req.url.indexOf("?")) : "";
   res.redirect(301, `/${GAME_NAME}/${query}`);
 });
