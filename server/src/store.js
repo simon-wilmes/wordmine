@@ -61,8 +61,8 @@ function validateName(name) {
   if (!trimmed) {
     return "Name is required.";
   }
-  if (trimmed.length < 2 || trimmed.length > 20) {
-    return "Name must be 2-20 characters.";
+  if (trimmed.length < 2 || trimmed.length > 25) {
+    return "Name must be 2-25 characters.";
   }
   return null;
 }

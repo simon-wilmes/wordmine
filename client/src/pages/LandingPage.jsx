@@ -56,7 +56,7 @@ function NameModal({ title, submitLabel, onSubmit, onClose, showVisibility, show
               onChange={(e) => setName(e.target.value)}
               placeholder={t("enterYourName")}
               minLength={2}
-              maxLength={20}
+              maxLength={25}
               required
             />
           </label>

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useI18n } from "../lib/i18n";
 import { getLobby } from "../lib/api";
+import { getPlayerNameRenderNoScale } from "../lib/playerNameDisplay";
 import { getSocket } from "../lib/socket";
 import { clearStoredPlayerId, getStoredPlayerId } from "../lib/session";
 
@@ -383,29 +384,34 @@ export default function LobbyPage() {
         </div>
         <ul className="player-list">
           {lobby.players.map((player) => (
-            <li
-              key={player.id}
-              className={`agent-badge${player.isHost ? " is-host" : ""}${player.id === playerId ? " is-self" : ""}`}
-            >
-              <div className="agent-avatar" style={player.color ? { background: player.color } : undefined}>{player.name.charAt(0)}</div>
-              <div className="agent-info">
-                <span className="agent-name" style={player.color ? { color: player.color } : undefined}>{player.name}</span>
-                {player.isHost && <span className="agent-role-tag">Handler</span>}
-                {player.isAI && <span className="agent-role-tag">{t("aiAgentTag")}</span>}
-                {player.id === playerId && <span className="agent-self-tag">{t("you")}</span>}
-                {!player.connected && <span className="agent-offline">{t("offline")}</span>}
-              </div>
-              {isHost && !player.isHost && (
-                <button
-                  type="button"
-                  className="agent-kick-btn"
-                  onClick={() => kickPlayer(player.id)}
-                  title={`Kick ${player.name}`}
+            (() => {
+              const nameRender = getPlayerNameRenderNoScale(player);
+              return (
+                <li
+                  key={player.id}
+                  className={`agent-badge${player.isHost ? " is-host" : ""}${player.id === playerId ? " is-self" : ""}`}
                 >
-                  ✕
-                </button>
-              )}
-            </li>
+                  <div className="agent-avatar" style={player.color ? { background: player.color } : undefined}>{player.name.charAt(0)}</div>
+                  <div className="agent-info">
+                    <span className={`agent-name ${nameRender.className}`.trim()} style={nameRender.style}>{nameRender.text}</span>
+                    {player.isHost && <span className="agent-role-tag">Handler</span>}
+                    {player.isAI && <span className="agent-role-tag">{t("aiAgentTag")}</span>}
+                    {player.id === playerId && <span className="agent-self-tag">{t("you")}</span>}
+                    {!player.connected && <span className="agent-offline">{t("offline")}</span>}
+                  </div>
+                  {isHost && !player.isHost && (
+                    <button
+                      type="button"
+                      className="agent-kick-btn"
+                      onClick={() => kickPlayer(player.id)}
+                      title={`Kick ${player.name}`}
+                    >
+                      ✕
+                    </button>
+                  )}
+                </li>
+              );
+            })()
           ))}
         </ul>
 

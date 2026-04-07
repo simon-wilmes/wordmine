@@ -11,6 +11,7 @@ Realtime multiplayer Codenames-inspired party game with private/public lobbies, 
 - In-game chat with rate limiting and automatic round-score breakdowns
 - In-game HUD with live phase status text (for example `HANDLER TRANSMITTING`, `MISSION DEBRIEF`) including animated transmission dots
 - Adaptive tablet-height layout for live games: `Past Rounds` timeline and `Terminal` stay docked at the bottom when space allows, and automatically move below the game content (scrollable page flow) on shorter viewports to prevent overlap
+- Player names are validated to `2-25` characters; game UI uses adaptive name-size tiers (`0-14` normal, `15-19` small, `20-25` tiny) in constrained areas (scores, operatives status, card markers, past-round timeline), while lobby and final game overview keep non-scaled name text
 - Operatives sidebar status labels: `waiting` during clue transmission phases, `guessing` during guess phase, `finished` when done, and `timed out` when guess timer expires before finishing
 - Round-end board reveal + end-game podium with detailed stats
 - Past-round replay timeline with per-cluegiver snapshots (available during live play and on final overview)
@@ -229,8 +230,8 @@ The same replay overview is also available on the final game overview screen (`G
 
 ## Lobby & Session Flow
 
-1. **Create lobby** (`POST /api/lobbies`) — body includes `name` (player), `visibility`, `lobbyName`, and `browserId`; returns `lobbyId` + `playerId` (host)
-2. **Join lobby** (`POST /api/lobbies/:id/join`) — body includes `name`, `viaInvite`, and `browserId`; returns `playerId` for the new player (lobby hard limit: 8 players)
+1. **Create lobby** (`POST /api/lobbies`) — body includes `name` (player, `2-25` chars), `visibility`, `lobbyName`, and `browserId`; returns `lobbyId` + `playerId` (host)
+2. **Join lobby** (`POST /api/lobbies/:id/join`) — body includes `name` (`2-25` chars), `viaInvite`, and `browserId`; returns `playerId` for the new player (lobby hard limit: 8 players)
 3. **Connect socket** (`join-lobby` event) — joins the Socket.io room, marks player connected
 4. **Start game** (`start-game` event) — host only, requires 2+ players
 5. **Play** — game state pushed to each player via `game-state` with role-appropriate views

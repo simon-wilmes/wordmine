@@ -4,6 +4,7 @@ import { getHistoricalGame, getLobby } from "../lib/api";
 import StatsChips from "../components/game/StatsChips";
 import { useI18n } from "../lib/i18n";
 import { cardClass, getCardMarkerNames, getWordLengthClass } from "../lib/gameViewModel";
+import { getMarkerPillStyle, getPlayerNameRender, getPlayerNameRenderNoScale } from "../lib/playerNameDisplay";
 import { clearStoredPlayerId, getOrCreateBrowserId, getStoredPlayerId, setStoredPlayerId } from "../lib/session";
 import { getSocket } from "../lib/socket";
 
@@ -22,59 +23,6 @@ const ROLE_LABEL_KEYS = {
   "clue-all": "roleClueAll",
   viewer: "roleViewer"
 };
-function parseColorToRgb(color) {
-  if (!color || typeof color !== "string") return null;
-  const raw = color.trim();
-
-  const hexMatch = raw.match(/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/);
-  if (hexMatch) {
-    const hex = hexMatch[1];
-    if (hex.length === 3) {
-      return {
-        r: parseInt(`${hex[0]}${hex[0]}`, 16),
-        g: parseInt(`${hex[1]}${hex[1]}`, 16),
-        b: parseInt(`${hex[2]}${hex[2]}`, 16)
-      };
-    }
-    return {
-      r: parseInt(hex.slice(0, 2), 16),
-      g: parseInt(hex.slice(2, 4), 16),
-      b: parseInt(hex.slice(4, 6), 16)
-    };
-  }
-
-  const rgbMatch = raw.match(/^rgba?\((\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})(?:\s*,\s*([0-9.]+))?\)$/i);
-  if (rgbMatch) {
-    return {
-      r: Math.max(0, Math.min(255, Number(rgbMatch[1]))),
-      g: Math.max(0, Math.min(255, Number(rgbMatch[2]))),
-      b: Math.max(0, Math.min(255, Number(rgbMatch[3])))
-    };
-  }
-
-  return null;
-}
-
-function getReadableTextColor(backgroundColor) {
-  const rgb = parseColorToRgb(backgroundColor);
-  if (!rgb) return "#ffffff";
-  const luminance = (0.299 * rgb.r + 0.587 * rgb.g + 0.114 * rgb.b) / 255;
-  return luminance > 0.6 ? "#0f1115" : "#ffffff";
-}
-
-function getMarkerPillStyle(entry) {
-  if (!entry?.color) return undefined;
-  if (entry.state === "mark") {
-    return { color: entry.color, borderColor: entry.color };
-  }
-
-  return {
-    backgroundColor: entry.color,
-    borderColor: entry.color,
-    color: getReadableTextColor(entry.color),
-    textShadow: "none"
-  };
-}
 
 export default function GamePage() {
   const { t } = useI18n();
@@ -689,13 +637,18 @@ export default function GamePage() {
                   {markerNames.length > 0 && (
                     <div className="card-markers">
                       {markerNames.map((entry) => (
+                        (() => {
+                          const nameRender = getPlayerNameRender(entry);
+                          return (
                         <span
                           key={`${selectedSnapshot.id}-${entry.key}`}
-                          className={`card-marker-pill ${entry.state}`}
-                          style={entry.color ? { color: entry.color, borderColor: entry.color } : undefined}
+                            className={`card-marker-pill ${entry.state} ${nameRender.className}`.trim()}
+                            style={{ ...(nameRender.style || {}), ...(getMarkerPillStyle(entry) || {}) }}
                         >
-                          {entry.name}
+                            {nameRender.text}
                         </span>
+                          );
+                        })()
                       ))}
                     </div>
                   )}
@@ -715,14 +668,19 @@ export default function GamePage() {
 
         <ul className="replay-summary-list">
           {(selectedSnapshot.allGuesserActions || []).map((actor) => (
-            <li key={`${selectedSnapshot.id}-${actor.playerId}`} className="replay-summary-item">
-              <span style={actor.color ? { color: actor.color } : undefined}>{actor.name}</span>
-              <span>{(actor.guessedCorrect || []).length}✓</span>
-              <span>{(actor.guessedNeutral || []).length}~</span>
-              <span>{(actor.guessedWrongRed || []).length}R</span>
-              <span>{(actor.guessedWrongBlack || []).length}B</span>
-              <span>{(actor.marks || []).length}M</span>
-            </li>
+            (() => {
+              const nameRender = getPlayerNameRenderNoScale(actor);
+              return (
+                <li key={`${selectedSnapshot.id}-${actor.playerId}`} className="replay-summary-item">
+                  <span className={nameRender.className} style={nameRender.style}>{nameRender.text}</span>
+                  <span>{(actor.guessedCorrect || []).length}✓</span>
+                  <span>{(actor.guessedNeutral || []).length}~</span>
+                  <span>{(actor.guessedWrongRed || []).length}R</span>
+                  <span>{(actor.guessedWrongBlack || []).length}B</span>
+                  <span>{(actor.marks || []).length}M</span>
+                </li>
+              );
+            })()
           ))}
         </ul>
       </div>
@@ -764,6 +722,12 @@ export default function GamePage() {
         <p className="replay-timeline-title">{t("pastRounds") || "Past Rounds"}</p>
         <div className="replay-timeline-row">
           {roundSnapshots.map((snapshot) => (
+            (() => {
+              const clueGiverRender = getPlayerNameRender({
+                name: snapshot.clueGiverName || "Unknown",
+                color: snapshot.clueGiverColor || null
+              });
+              return (
             <button
               key={snapshot.id}
               type="button"
@@ -775,10 +739,10 @@ export default function GamePage() {
               title={`${snapshot.clueGiverName || "Unknown"} ${snapshotSequenceById[snapshot.id] || 1}`}
             >
               <span className="replay-thumb-label">
-                <span style={snapshot.clueGiverColor ? { color: snapshot.clueGiverColor } : undefined}>
-                  {snapshot.clueGiverName || "Unknown"}
-                </span>{" "}
-                {snapshotSequenceById[snapshot.id] || 1}
+                <span className={`replay-thumb-name ${clueGiverRender.className}`.trim()} style={clueGiverRender.style}>
+                  {clueGiverRender.text || "Unknown"}
+                </span>
+                <span className="replay-thumb-seq">{snapshotSequenceById[snapshot.id] || 1}</span>
               </span>
               <span className="replay-thumb-grid" aria-hidden="true">
                 {(snapshot.board?.cards || []).map((card) => (
@@ -793,6 +757,8 @@ export default function GamePage() {
                 ))}
               </span>
             </button>
+              );
+            })()
           ))}
         </div>
       </div>
@@ -860,16 +826,21 @@ export default function GamePage() {
 
           <div className="podium-grid">
             {podium.map((p, idx) => (
+              (() => {
+                const nameRender = getPlayerNameRenderNoScale(p);
+                return (
               <div
                 key={p.playerId}
                 className={`podium-card place-${idx + 1} tie-group-${podiumColorGroupByScore[p.total] ?? idx}`}
               >
                 <p className="podium-place">#{idx + 1}</p>
-                <h3 style={p.color ? { color: p.color } : undefined}>{p.name}</h3>
+                <h3 className={nameRender.className} style={nameRender.style}>{nameRender.text}</h3>
                 <p className="podium-score">{p.total} {t("pts")}</p>
                 <StatsChips stats={p} />
                 <p className="podium-total-guessed">{t("totalGuessed")}: {p.totalGuessed}</p>
               </div>
+                );
+              })()
             ))}
           </div>
 
@@ -878,12 +849,17 @@ export default function GamePage() {
               <h3>{t("remainingPlayers")}</h3>
               <ul className="end-list-items">
                 {others.map((p, idx) => (
-                  <li key={p.playerId} className="end-list-item">
-                    <span className="end-list-rank">#{idx + 4}</span>
-                    <span className="end-list-name" style={p.color ? { color: p.color } : undefined}>{p.name}</span>
-                    <span className="end-list-score">{p.total} {t("pts")}</span>
-                    <StatsChips stats={p} />
-                  </li>
+                  (() => {
+                    const nameRender = getPlayerNameRenderNoScale(p);
+                    return (
+                      <li key={p.playerId} className="end-list-item">
+                        <span className="end-list-rank">#{idx + 4}</span>
+                        <span className={`end-list-name ${nameRender.className}`.trim()} style={nameRender.style}>{nameRender.text}</span>
+                        <span className="end-list-score">{p.total} {t("pts")}</span>
+                        <StatsChips stats={p} />
+                      </li>
+                    );
+                  })()
                 ))}
               </ul>
             </div>
@@ -923,14 +899,19 @@ export default function GamePage() {
         <h2>{t("scores")}</h2>
         <ul className="score-list">
           {scoreRows.map((row) => (
-            <li key={row.playerId} className="score-row">
-              <span className="score-rank" />
-              <span className="score-name" style={row.color ? { color: row.color } : undefined}>
-                {row.name}
-                {row.isAI ? ` [${t("aiAgentTag")}]` : ""}
-              </span>
-              <span className="score-pts">{row.total}</span>
-            </li>
+            (() => {
+              const nameRender = getPlayerNameRender(row);
+              return (
+                <li key={row.playerId} className="score-row">
+                  <span className="score-rank" />
+                  <span className={`score-name ${nameRender.className}`.trim()} style={nameRender.style}>
+                    {nameRender.text}
+                    {row.isAI ? ` [${t("aiAgentTag")}]` : ""}
+                  </span>
+                  <span className="score-pts">{row.total}</span>
+                </li>
+              );
+            })()
           ))}
         </ul>
         <p className="round-indicator">
@@ -962,10 +943,15 @@ export default function GamePage() {
                 {t("role")}: {t(ROLE_LABEL_KEYS[game.role] || game.role)}
               </span>
               {game.phase !== "clue-all" && (
+                (() => {
+                  const clueGiverRender = getPlayerNameRenderNoScale(game?.clueGiver || {});
+                  return (
                 <span className="handler-badge">
-                  {t("clueGiver")}: <span style={clueGiverColor ? { color: clueGiverColor } : undefined}>{game.clueGiver?.name}</span>
+                  {t("clueGiver")}: <span className={clueGiverRender.className} style={clueGiverRender.style || (clueGiverColor ? { color: clueGiverColor } : undefined)}>{clueGiverRender.text}</span>
                   {game.clueGiver?.isAI ? ` [${t("aiAgentTag")}]` : ""}
                 </span>
+                  );
+                })()
               )}
               {game.phase === "clue-all" && (
                 <span className="handler-badge">
@@ -1021,14 +1007,19 @@ export default function GamePage() {
                   markerNames.length > 0 && (
                     <div className="card-markers">
                       {markerNames.map((entry) => (
-                        <span
-                          key={entry.key}
-                          className={`card-marker-pill ${entry.state}`}
-                          style={getMarkerPillStyle(entry)}
-                          title={`${entry.name} ${entry.state === "mark" ? "marked" : "guessed"} this card`}
-                        >
-                          {entry.name}
-                        </span>
+                        (() => {
+                          const nameRender = getPlayerNameRender(entry);
+                          return (
+                            <span
+                              key={entry.key}
+                              className={`card-marker-pill ${entry.state} ${nameRender.className}`.trim()}
+                              style={{ ...(nameRender.style || {}), ...(getMarkerPillStyle(entry) || {}) }}
+                              title={`${entry.name} ${entry.state === "mark" ? "marked" : "guessed"} this card`}
+                            >
+                              {nameRender.text}
+                            </span>
+                          );
+                        })()
                       ))}
                     </div>
                   )}
@@ -1145,17 +1136,46 @@ export default function GamePage() {
               else if (g.finished) barClass += " bar-exhausted";
 
               let statusKey = "finished";
+              let statusTone = "waiting";
+              let statusTooltip = t("finished");
               if (!g.finished) {
                 statusKey = game.phase === "guess" ? "guessing" : "waiting";
+                statusTone = game.phase === "guess" ? "guessing" : "waiting";
+                statusTooltip = t(game.phase === "guess" ? "guessing" : "waiting");
               } else if (g.finishReason === "timeout") {
                 statusKey = "timedOut";
+                statusTone = "timeout";
+                statusTooltip = t("statusTimedOutLong");
+              } else if (g.blackCount > 0) {
+                statusTone = "black";
+                statusTooltip = t("statusFinishedWithBlackCard");
+              } else if (g.redCount > 0) {
+                statusTone = "red";
+                statusTooltip = t("statusFinishedWithRedCard");
+              } else if (game.clueCount > 0 && g.correctCount >= game.clueCount) {
+                statusTone = "green";
+                statusTooltip = t("statusFinishedAllTargets");
+              } else {
+                statusTone = "exhausted";
+                statusTooltip = t("statusFinishedNoGuessesLeft");
               }
 
               return (
                 <li key={g.playerId} className={barClass}>
-                  <span className="operative-bar-name" style={g.color ? { color: g.color } : undefined}>{g.name}</span>
-                  <span className="operative-bar-status">
-                    {t(statusKey)}
+                  {(() => {
+                    const nameRender = getPlayerNameRender(g);
+                    return (
+                      <span className={`operative-bar-name ${nameRender.className}`.trim()} style={nameRender.style}>{nameRender.text}</span>
+                    );
+                  })()}
+                  <span
+                    className={`operative-bar-status status-${statusKey} tone-${statusTone}`}
+                    data-status={statusTooltip}
+                    aria-label={statusTooltip}
+                    title={statusTooltip}
+                  >
+                    <span className="operative-status-icon" aria-hidden="true">i</span>
+                    <span className="operative-status-text">{t(statusKey)}</span>
                   </span>
                 </li>
               );
@@ -1263,7 +1283,10 @@ export default function GamePage() {
                   {entry.type === "system-score" && entry.items ? (
                     <div className="chat-score-block">
                       <div className="chat-score-header">
-                        <span className="chat-name" style={entry.actorColor ? { color: entry.actorColor } : undefined}>{entry.actorName}</span>
+                        {(() => {
+                          const nameRender = getPlayerNameRenderNoScale({ name: entry.actorName, color: entry.actorColor });
+                          return <span className={`chat-name ${nameRender.className}`.trim()} style={nameRender.style}>{nameRender.text}</span>;
+                        })()}
                         <span className="chat-role">({entry.role})</span>
                         <span className={`chat-total ${entry.total >= 0 ? "positive" : "negative"}`}>
                           {entry.total >= 0 ? `+${entry.total}` : entry.total}
@@ -1282,7 +1305,10 @@ export default function GamePage() {
                     </div>
                   ) : (
                     <>
-                      <span className="chat-name" style={entry.color ? { color: entry.color } : undefined}>{entry.name}:</span>
+                      {(() => {
+                        const nameRender = getPlayerNameRenderNoScale(entry);
+                        return <span className={`chat-name ${nameRender.className}`.trim()} style={nameRender.style}>{nameRender.text}:</span>;
+                      })()}
                       <span className="chat-text">{entry.text}</span>
                     </>
                   )}
