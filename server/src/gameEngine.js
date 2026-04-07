@@ -4,39 +4,23 @@ const path = require("path");
 
 const activeGames = new Map();
 
-const FALLBACK_WORDS = [
-  "bridge", "planet", "forest", "camera", "castle", "rocket", "pirate", "doctor", "puzzle", "island",
-  "magnet", "thunder", "window", "garden", "river", "silver", "dragon", "piano", "market", "desert",
-  "spider", "coffee", "signal", "orange", "winter", "summer", "autumn", "spring", "jungle", "saturn",
-  "mercury", "comet", "hammer", "engine", "singer", "monkey", "viking", "wizard", "fossil", "harbor",
-  "candle", "helmet", "school", "forest", "marble", "anchor", "violet", "museum", "border", "battle",
-  "future", "mirror", "button", "planet", "needle", "blanket", "storm", "ladder", "temple", "signal",
-  "guitar", "ticket", "bubble", "valley", "falcon", "laptop", "orange", "canal", "bronze", "islander",
-  "cookie", "shelter", "voyage", "oxygen", "shadow", "pepper", "sapphire", "rhythm", "jigsaw", "legend",
-  "lantern", "compass", "summit", "harvest", "canvas", "throne", "crystal", "plasma", "nebula", "portal"
-];
+function loadWordsFromFile(fileName) {
+  const absolute = path.resolve(__dirname, "../../", fileName);
+  const raw = fs.readFileSync(absolute, "utf8");
+  const words = raw
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
 
-function loadWordsFromFile(fileName, fallbackWords) {
-  try {
-    const absolute = path.resolve(__dirname, "../../", fileName);
-    const raw = fs.readFileSync(absolute, "utf8");
-    const words = raw
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter(Boolean);
-
-    if (words.length >= 25) {
-      return words;
-    }
-  } catch {
-    // Fallback below.
+  if (words.length < 25) {
+    throw new Error(`Word file "${fileName}" has only ${words.length} words (minimum 25 required)`);
   }
-  return fallbackWords;
+  return words;
 }
 
 const WORDS_BY_LANGUAGE = {
-  en: loadWordsFromFile("words-en.txt", FALLBACK_WORDS),
-  de: loadWordsFromFile("words-de.txt", FALLBACK_WORDS)
+  en: loadWordsFromFile("words-en.txt"),
+  de: loadWordsFromFile("words-de.txt")
 };
 
 const CHAT_MAX_MESSAGE_LENGTH = 1000;
