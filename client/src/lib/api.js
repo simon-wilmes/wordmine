@@ -2,6 +2,7 @@ const API_BASE = `/${import.meta.env.VITE_GAME_NAME || "wordmine"}`;
 
 async function request(path, options = {}) {
   const res = await fetch(`${API_BASE}${path}`, {
+    credentials: "include",
     headers: {
       "Content-Type": "application/json",
       ...(options.headers || {})
@@ -54,4 +55,29 @@ export function getGameHistory(browserId, limit = 30, offset = 0) {
 export function getHistoricalGame(lobbyId, browserId) {
   const params = new URLSearchParams({ browserId });
   return request(`/api/games/history/${lobbyId}?${params.toString()}`);
+}
+
+export function signup(username, password, guestCode = "") {
+  return request("/api/auth/signup", {
+    method: "POST",
+    body: JSON.stringify({ username, password, guestCode })
+  });
+}
+
+export function login(username, password, guestCode = "") {
+  return request("/api/auth/login", {
+    method: "POST",
+    body: JSON.stringify({ username, password, guestCode })
+  });
+}
+
+export function logout() {
+  return request("/api/auth/logout", {
+    method: "POST",
+    body: JSON.stringify({})
+  });
+}
+
+export function getMe() {
+  return request("/api/auth/me");
 }

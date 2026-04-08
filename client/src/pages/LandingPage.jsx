@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { createLobby, getGameHistory, getLobby, joinLobby, listGames, listLobbies } from "../lib/api";
+import { createLobby, getGameHistory, getLobby, getMe, joinLobby, listGames, listLobbies, logout } from "../lib/api";
 import { useI18n } from "../lib/i18n";
 import {
   clearStoredPlayerId,
@@ -9,6 +9,7 @@ import {
   getStoredPlayerId,
   setStoredPlayerId
 } from "../lib/session";
+import { readCachedAuthUser, writeCachedAuthUser } from "../lib/auth";
 import AgentCard from "../components/common/AgentCard";
 
 function NameModal({ title, submitLabel, onSubmit, onClose, showVisibility, showLobbyName, t }) {
@@ -101,6 +102,7 @@ export default function LandingPage() {
   const [modalMode, setModalMode] = useState(null);
   const [selectedLobbyId, setSelectedLobbyId] = useState("");
   const [inviteJoinMode, setInviteJoinMode] = useState(false);
+  const [authUser, setAuthUser] = useState(() => readCachedAuthUser());
   const browserId = useMemo(() => getOrCreateBrowserId(), []);
 
   const modalTitle = useMemo(() => {
@@ -211,6 +213,36 @@ export default function LandingPage() {
   }, [browserId]);
 
   useEffect(() => {
+    let cancelled = false;
+    async function loadMe() {
+      try {
+        const data = await getMe();
+        if (cancelled) return;
+        setAuthUser(data.user || null);
+        writeCachedAuthUser(data.user || null);
+      } catch {
+        if (cancelled) return;
+        setAuthUser(null);
+        writeCachedAuthUser(null);
+      }
+    }
+    loadMe();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  async function handleLogout() {
+    try {
+      await logout();
+    } catch {
+      // Ignore logout transport errors and still clear local cached user.
+    }
+    setAuthUser(null);
+    writeCachedAuthUser(null);
+  }
+
+  useEffect(() => {
     const inviteLobbyId = search.get("join");
     if (!inviteLobbyId) return;
     const next = new URLSearchParams(search);
@@ -246,6 +278,21 @@ export default function LandingPage() {
         <section className="card mission-hero">
           <h1>{t("quickLobbyGame")}</h1>
           <p>{t("heroText")}</p>
+          <div style={{ display: "flex", gap: "10px", flexWrap: "wrap", marginBottom: "10px" }}>
+            {authUser ? (
+              <>
+                <span style={{ color: "var(--text-muted)", fontSize: "0.85rem", alignSelf: "center" }}>
+                  Signed in as <strong>{authUser.username}</strong>
+                </span>
+                <button className="ghost" onClick={handleLogout}>Log Out</button>
+              </>
+            ) : (
+              <>
+                <button className="ghost" onClick={() => navigate("/login")}>Log In</button>
+                <button className="ghost" onClick={() => navigate("/signup")}>Sign Up</button>
+              </>
+            )}
+          </div>
           <button
             className="cta"
             onClick={() => {

@@ -1,6 +1,7 @@
 const fs = require("fs");
 const path = require("path");
 const sqlite3 = require("sqlite3").verbose();
+const crypto = require("crypto");
 
 const SCHEMA_VERSION = 1;
 const MINIMUM_READABLE_VERSION = 1;
@@ -133,6 +134,62 @@ function normalizeBrowserId(value) {
   return normalized;
 }
 
+function normalizeUserCode(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (!/^[a-f0-9]{128}$/.test(normalized)) {
+    return "";
+  }
+  return normalized;
+}
+
+function normalizeUsername(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (!/^[a-z0-9_]{3,30}$/.test(normalized)) {
+    return "";
+  }
+  return normalized;
+}
+
+function randomHex(bytes) {
+  return crypto.randomBytes(bytes).toString("hex");
+}
+
+async function isIdentityCodeTaken(code) {
+  const normalized = normalizeUserCode(code);
+  if (!normalized) return true;
+
+  const rows = await all(
+    `
+    SELECT 1 AS found FROM users WHERE user_code = ?
+    UNION
+    SELECT 1 AS found FROM user_guest_codes WHERE guest_code = ?
+    UNION
+    SELECT 1 AS found FROM game_participants WHERE browser_id = ?
+    LIMIT 1
+    `,
+    [normalized, normalized, normalized]
+  );
+  return rows.length > 0;
+}
+
+async function generateUniqueUserCode(maxAttempts = 12) {
+  for (let i = 0; i < maxAttempts; i += 1) {
+    const candidate = randomHex(64);
+    // eslint-disable-next-line no-await-in-loop
+    const taken = await isIdentityCodeTaken(candidate);
+    if (!taken) {
+      return candidate;
+    }
+  }
+  throw new Error("Could not generate a unique identity code.");
+}
+
+async function pruneExpiredSessions(now = Date.now()) {
+  if (!db) return { deletedSessions: 0 };
+  const result = await run("DELETE FROM sessions WHERE expires_at < ?", [Number(now)]);
+  return { deletedSessions: Number(result.changes || 0) };
+}
+
 function mapArchiveSummary(row, payload) {
   const scores = [...(payload.scores || [])].sort((a, b) => Number(b.total || 0) - Number(a.total || 0));
   const winner = scores[0] || null;
@@ -263,9 +320,48 @@ async function initPersistence(options = {}) {
       game_id TEXT NOT NULL,
       player_id TEXT NOT NULL,
       browser_id TEXT NOT NULL,
+      user_id TEXT,
       player_name TEXT,
       PRIMARY KEY (game_id, player_id),
       FOREIGN KEY (game_id) REFERENCES games(game_id) ON DELETE CASCADE
+    )
+  `);
+
+  const participantColumns = await all("PRAGMA table_info(game_participants)");
+  const hasUserIdColumn = participantColumns.some((row) => row.name === "user_id");
+  if (!hasUserIdColumn) {
+    await run("ALTER TABLE game_participants ADD COLUMN user_id TEXT");
+  }
+
+  await run(`
+    CREATE TABLE IF NOT EXISTS users (
+      user_id TEXT PRIMARY KEY,
+      user_code TEXT UNIQUE NOT NULL,
+      username TEXT UNIQUE NOT NULL,
+      password_hash TEXT NOT NULL,
+      password_salt TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    )
+  `);
+
+  await run(`
+    CREATE TABLE IF NOT EXISTS sessions (
+      session_id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      expires_at INTEGER NOT NULL,
+      FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+    )
+  `);
+
+  await run(`
+    CREATE TABLE IF NOT EXISTS user_guest_codes (
+      user_id TEXT NOT NULL,
+      guest_code TEXT NOT NULL UNIQUE,
+      linked_at INTEGER NOT NULL,
+      PRIMARY KEY (user_id, guest_code),
+      FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
     )
   `);
 
@@ -273,8 +369,11 @@ async function initPersistence(options = {}) {
   await run("CREATE INDEX IF NOT EXISTS idx_games_finished_at ON games(finished_at DESC)");
   await run("CREATE INDEX IF NOT EXISTS idx_games_retention_until ON games(retention_until)");
   await run("CREATE INDEX IF NOT EXISTS idx_participants_browser ON game_participants(browser_id, game_id)");
+  await run("CREATE INDEX IF NOT EXISTS idx_participants_user ON game_participants(user_id, game_id)");
+  await run("CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id, expires_at)");
 
   await pruneExpiredGames();
+  await pruneExpiredSessions();
 }
 
 async function pruneExpiredGames(now = Date.now()) {
@@ -320,12 +419,13 @@ async function archiveFinishedGame(game, lobby) {
       if (!browserId) {
         continue;
       }
+      const userId = String(player.userId || "").trim() || null;
       await run(
         `
-        INSERT INTO game_participants (game_id, player_id, browser_id, player_name)
-        VALUES (?, ?, ?, ?)
+        INSERT INTO game_participants (game_id, player_id, browser_id, user_id, player_name)
+        VALUES (?, ?, ?, ?, ?)
         `,
-        [game.id, player.id, browserId, player.name || null]
+        [game.id, player.id, browserId, userId, player.name || null]
       );
     }
   });
@@ -401,10 +501,207 @@ async function getHistoryGameForBrowser(browserId, lobbyId) {
   return mapArchiveDetail(merged, payload);
 }
 
+async function listHistoryForUser(userId, options = {}) {
+  const normalizedUserId = String(userId || "").trim();
+  if (!normalizedUserId) {
+    return { games: [] };
+  }
+
+  const limit = Math.min(100, Math.max(1, Number(options.limit || 30)));
+  const offset = Math.max(0, Number(options.offset || 0));
+  const rows = await all(
+    `
+    SELECT DISTINCT g.*
+    FROM games g
+    INNER JOIN game_participants gp ON gp.game_id = g.game_id
+    WHERE gp.user_id = ?
+    ORDER BY g.finished_at DESC
+    LIMIT ? OFFSET ?
+    `,
+    [normalizedUserId, limit, offset]
+  );
+
+  const games = rows.map((row) => {
+    const { payload, legacyReason } = parseArchivePayload(row);
+    const merged = {
+      ...row,
+      legacy_reason: row.legacy_reason || legacyReason || null
+    };
+    return mapArchiveSummary(merged, payload);
+  });
+
+  return { games };
+}
+
+async function getHistoryGameForUser(userId, lobbyId) {
+  const normalizedUserId = String(userId || "").trim();
+  if (!normalizedUserId || !lobbyId) {
+    return null;
+  }
+
+  const rows = await all(
+    `
+    SELECT g.*
+    FROM games g
+    INNER JOIN game_participants gp ON gp.game_id = g.game_id
+    WHERE gp.user_id = ? AND g.lobby_id = ?
+    ORDER BY g.finished_at DESC
+    LIMIT 1
+    `,
+    [normalizedUserId, String(lobbyId)]
+  );
+
+  const row = rows[0];
+  if (!row) {
+    return null;
+  }
+
+  const { payload, legacyReason } = parseArchivePayload(row);
+  const merged = {
+    ...row,
+    legacy_reason: row.legacy_reason || legacyReason || null
+  };
+  return mapArchiveDetail(merged, payload);
+}
+
+async function createUser({ username, passwordHash, passwordSalt, userCode }) {
+  const normalizedUsername = normalizeUsername(username);
+  const normalizedUserCode = normalizeUserCode(userCode);
+  if (!normalizedUsername || !passwordHash || !passwordSalt || !normalizedUserCode) {
+    throw new Error("Invalid user fields.");
+  }
+
+  const now = Date.now();
+  const userId = randomHex(16);
+  await run(
+    `
+    INSERT INTO users (user_id, user_code, username, password_hash, password_salt, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+    `,
+    [userId, normalizedUserCode, normalizedUsername, String(passwordHash), String(passwordSalt), now, now]
+  );
+  return { userId, username: normalizedUsername, userCode: normalizedUserCode };
+}
+
+async function getUserByUsername(username) {
+  const normalizedUsername = normalizeUsername(username);
+  if (!normalizedUsername) return null;
+  const rows = await all(
+    "SELECT user_id, user_code, username, password_hash, password_salt, created_at, updated_at FROM users WHERE username = ? LIMIT 1",
+    [normalizedUsername]
+  );
+  return rows[0] || null;
+}
+
+async function getUserById(userId) {
+  const normalizedUserId = String(userId || "").trim();
+  if (!normalizedUserId) return null;
+  const rows = await all(
+    "SELECT user_id, user_code, username, created_at, updated_at FROM users WHERE user_id = ? LIMIT 1",
+    [normalizedUserId]
+  );
+  return rows[0] || null;
+}
+
+async function createSession(userId, ttlMs = 14 * 24 * 60 * 60 * 1000) {
+  const normalizedUserId = String(userId || "").trim();
+  if (!normalizedUserId) {
+    throw new Error("userId is required.");
+  }
+  const now = Date.now();
+  const expiresAt = now + Math.max(60_000, Number(ttlMs) || 0);
+  const sessionId = randomHex(32);
+  await run(
+    "INSERT INTO sessions (session_id, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)",
+    [sessionId, normalizedUserId, now, expiresAt]
+  );
+  return { sessionId, userId: normalizedUserId, expiresAt };
+}
+
+async function getSession(sessionId) {
+  const normalizedSessionId = String(sessionId || "").trim();
+  if (!normalizedSessionId) return null;
+  const rows = await all(
+    `
+    SELECT s.session_id, s.user_id, s.created_at, s.expires_at, u.username, u.user_code
+    FROM sessions s
+    INNER JOIN users u ON u.user_id = s.user_id
+    WHERE s.session_id = ?
+    LIMIT 1
+    `,
+    [normalizedSessionId]
+  );
+  const row = rows[0] || null;
+  if (!row) return null;
+  if (Number(row.expires_at) < Date.now()) {
+    await run("DELETE FROM sessions WHERE session_id = ?", [normalizedSessionId]);
+    return null;
+  }
+  return row;
+}
+
+async function deleteSession(sessionId) {
+  const normalizedSessionId = String(sessionId || "").trim();
+  if (!normalizedSessionId) return;
+  await run("DELETE FROM sessions WHERE session_id = ?", [normalizedSessionId]);
+}
+
+async function linkGuestCodeToUser(userId, guestCode) {
+  const normalizedUserId = String(userId || "").trim();
+  const normalizedGuestCode = normalizeBrowserId(guestCode);
+  if (!normalizedUserId || !normalizedGuestCode) {
+    return { linked: false, reason: "invalid" };
+  }
+
+  const existing = await all(
+    "SELECT user_id FROM user_guest_codes WHERE guest_code = ? LIMIT 1",
+    [normalizedGuestCode]
+  );
+  if (existing[0] && String(existing[0].user_id) !== normalizedUserId) {
+    return { linked: false, reason: "belongs-to-another-user" };
+  }
+
+  await run(
+    "INSERT OR IGNORE INTO user_guest_codes (user_id, guest_code, linked_at) VALUES (?, ?, ?)",
+    [normalizedUserId, normalizedGuestCode, Date.now()]
+  );
+
+  return { linked: true };
+}
+
+async function backfillHistoryForGuestCode(userId, guestCode) {
+  const normalizedUserId = String(userId || "").trim();
+  const normalizedGuestCode = normalizeBrowserId(guestCode);
+  if (!normalizedUserId || !normalizedGuestCode) {
+    return { updatedRows: 0 };
+  }
+  const result = await run(
+    `
+    UPDATE game_participants
+    SET user_id = ?
+    WHERE browser_id = ? AND (user_id IS NULL OR user_id = '')
+    `,
+    [normalizedUserId, normalizedGuestCode]
+  );
+  return { updatedRows: Number(result.changes || 0) };
+}
+
 module.exports = {
   initPersistence,
   archiveFinishedGame,
   listHistoryForBrowser,
   getHistoryGameForBrowser,
-  pruneExpiredGames
+  listHistoryForUser,
+  getHistoryGameForUser,
+  createUser,
+  getUserByUsername,
+  getUserById,
+  createSession,
+  getSession,
+  deleteSession,
+  pruneExpiredGames,
+  pruneExpiredSessions,
+  generateUniqueUserCode,
+  linkGuestCodeToUser,
+  backfillHistoryForGuestCode
 };

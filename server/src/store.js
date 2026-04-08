@@ -126,7 +126,7 @@ function validateLobbyName(name) {
   return null;
 }
 
-function createLobby(hostName, visibility = "public", overrideSettings = null, lobbyName = null, preferredColor = null, browserId = "") {
+function createLobby(hostName, visibility = "public", overrideSettings = null, lobbyName = null, preferredColor = null, browserId = "", userId = "") {
   const nameError = validateName(hostName);
   if (nameError) {
     return { error: nameError };
@@ -163,7 +163,8 @@ function createLobby(hostName, visibility = "public", overrideSettings = null, l
         connected: false,
         color: pickColor([], preferredColor),
         isAI: false,
-        browserId: normalizeBrowserId(browserId)
+        browserId: normalizeBrowserId(browserId),
+        userId: String(userId || "").trim() || null
       }
     ]
   };
@@ -224,7 +225,12 @@ function getSerializedLobby(lobbyId) {
 }
 
 function joinLobby(lobbyId, playerName, options = {}) {
-  const { viaInvite = false, preferredColor = null, browserId = "" } = options;
+  const {
+    viaInvite = false,
+    preferredColor = null,
+    browserId = "",
+    userId = ""
+  } = options;
   const nameError = validateName(playerName);
   if (nameError) {
     return { error: nameError };
@@ -258,7 +264,8 @@ function joinLobby(lobbyId, playerName, options = {}) {
     connected: false,
     color: pickColor(lobby.players, preferredColor),
     isAI: false,
-    browserId: normalizeBrowserId(browserId)
+    browserId: normalizeBrowserId(browserId),
+    userId: String(userId || "").trim() || null
   });
   lobby.updatedAt = nowIso();
 

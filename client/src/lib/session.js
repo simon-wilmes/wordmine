@@ -51,10 +51,13 @@ export function clearStoredPlayerId(lobbyId) {
 }
 
 function makeBrowserId() {
-  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
-    return crypto.randomUUID();
+  if (typeof crypto !== "undefined" && typeof crypto.getRandomValues === "function") {
+    const bytes = new Uint8Array(64);
+    crypto.getRandomValues(bytes);
+    return Array.from(bytes, (value) => value.toString(16).padStart(2, "0")).join("");
   }
-  return `${Date.now().toString(16)}-${Math.random().toString(16).slice(2)}-${Math.random().toString(16).slice(2)}`;
+  // Fallback for old environments; modern browsers should always use Web Crypto above.
+  return `${Date.now().toString(16).padStart(16, "0")}${Math.random().toString(16).slice(2).padEnd(112, "0")}`.slice(0, 128);
 }
 
 function normalizeBrowserId(value) {

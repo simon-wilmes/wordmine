@@ -4,12 +4,16 @@ import { I18nProvider } from "./lib/i18n";
 import LandingPage from "./pages/LandingPage";
 import LobbyPage from "./pages/LobbyPage";
 import GamePage from "./pages/GamePage";
+import LoginPage from "./pages/LoginPage";
+import SignupPage from "./pages/SignupPage";
 
 export default function App() {
   return (
     <I18nProvider>
       <LanguageToggle />
       <Routes>
+        <Route path="/login" element={<LoginPage />} />
+        <Route path="/signup" element={<SignupPage />} />
         <Route path="/" element={<LandingPage />} />
         <Route path="/lobby/:lobbyId" element={<LobbyPage />} />
         <Route path="/game/:lobbyId" element={<GamePage />} />

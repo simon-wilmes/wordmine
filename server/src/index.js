@@ -2,6 +2,7 @@ const http = require("http");
 const express = require("express");
 const cors = require("cors");
 const path = require("path");
+const crypto = require("crypto");
 const { Server } = require("socket.io");
 const {
   createLobby,
@@ -41,10 +42,22 @@ const {
 } = require("./gameEngine");
 const {
   archiveFinishedGame,
+  backfillHistoryForGuestCode,
+  createSession,
+  createUser,
+  deleteSession,
+  generateUniqueUserCode,
   getHistoryGameForBrowser,
+  getHistoryGameForUser,
+  getSession,
+  getUserById,
+  getUserByUsername,
   initPersistence,
   listHistoryForBrowser,
-  pruneExpiredGames
+  listHistoryForUser,
+  linkGuestCodeToUser,
+  pruneExpiredGames,
+  pruneExpiredSessions
 } = require("./persistence");
 const { generateAIAgentClueAttempt, generateAIAgentGuessPlan } = require("./llmClueService");
 
@@ -54,10 +67,80 @@ const HISTORY_RETENTION_DAYS = Number(process.env.GAME_HISTORY_RETENTION_DAYS ||
 const HISTORY_PRUNE_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const DEBUG = String(process.env.SERVER_DEBUG || "false").toLowerCase() === "true";
 const HTTP_DEBUG_THROTTLE_MS = Number(process.env.SERVER_DEBUG_HTTP_THROTTLE_MS || 20000);
+const SESSION_COOKIE_NAME = `${GAME_NAME}_session`;
+const SESSION_TTL_MS = Number(process.env.AUTH_SESSION_TTL_MS || 14 * 24 * 60 * 60 * 1000);
 const app = express();
 const gameRouter = express.Router();
 const clientDist = path.resolve(__dirname, "../../client/dist");
 const httpDebugLastLogAt = new Map();
+
+function parseCookies(cookieHeader) {
+  const raw = String(cookieHeader || "");
+  if (!raw) return {};
+  return raw.split(";").reduce((acc, part) => {
+    const [key, ...rest] = part.trim().split("=");
+    if (!key) return acc;
+    acc[key] = decodeURIComponent(rest.join("=") || "");
+    return acc;
+  }, {});
+}
+
+function normalizeGuestCode(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (!normalized) return "";
+  if (normalized.length < 16 || normalized.length > 128) return "";
+  return normalized;
+}
+
+function assertValidPassword(password) {
+  const text = String(password || "");
+  if (text.length < 8 || text.length > 200) {
+    return "Password must be 8-200 characters.";
+  }
+  return null;
+}
+
+function assertValidUsername(username) {
+  const text = String(username || "").trim().toLowerCase();
+  if (!/^[a-z0-9_]{3,30}$/.test(text)) {
+    return "Username must be 3-30 chars and contain only lowercase letters, numbers, and underscores.";
+  }
+  return null;
+}
+
+function hashPassword(password) {
+  const salt = crypto.randomBytes(16).toString("hex");
+  const hash = crypto.scryptSync(String(password || ""), salt, 64).toString("hex");
+  return { salt, hash };
+}
+
+function verifyPassword(password, salt, expectedHash) {
+  const actualHash = crypto.scryptSync(String(password || ""), String(salt || ""), 64).toString("hex");
+  const actualBuffer = Buffer.from(actualHash, "hex");
+  const expectedBuffer = Buffer.from(String(expectedHash || ""), "hex");
+  if (actualBuffer.length !== expectedBuffer.length) return false;
+  return crypto.timingSafeEqual(actualBuffer, expectedBuffer);
+}
+
+function attachSessionCookie(res, sessionId, expiresAt) {
+  const secure = process.env.NODE_ENV === "production";
+  res.cookie(SESSION_COOKIE_NAME, sessionId, {
+    httpOnly: true,
+    sameSite: "lax",
+    secure,
+    path: "/",
+    expires: new Date(Number(expiresAt || Date.now()))
+  });
+}
+
+function clearSessionCookie(res) {
+  res.clearCookie(SESSION_COOKIE_NAME, {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: process.env.NODE_ENV === "production",
+    path: "/"
+  });
+}
 
 function logDebug(message, payload) {
   if (!DEBUG) return;
@@ -124,8 +207,165 @@ app.get(`/${GAME_NAME}`, (req, res, next) => {
   res.redirect(301, `/${GAME_NAME}/${query}`);
 });
 
+gameRouter.use(async (req, _res, next) => {
+  try {
+    const cookies = parseCookies(req.headers.cookie || "");
+    const sessionId = String(cookies[SESSION_COOKIE_NAME] || "").trim();
+    if (!sessionId) {
+      req.auth = null;
+      next();
+      return;
+    }
+    const session = await getSession(sessionId);
+    if (!session) {
+      req.auth = null;
+      next();
+      return;
+    }
+    req.auth = {
+      sessionId,
+      userId: session.user_id,
+      username: session.username,
+      userCode: session.user_code
+    };
+    next();
+  } catch (error) {
+    console.error("[auth] session middleware failed", error);
+    req.auth = null;
+    next();
+  }
+});
+
 gameRouter.get("/health", (_req, res) => {
   res.json({ ok: true });
+});
+
+gameRouter.post("/api/auth/signup", async (req, res) => {
+  const username = String(req.body?.username || "").trim().toLowerCase();
+  const password = String(req.body?.password || "");
+  const guestCode = normalizeGuestCode(req.body?.guestCode || "");
+
+  const usernameError = assertValidUsername(username);
+  if (usernameError) {
+    return res.status(400).json({ error: usernameError });
+  }
+
+  const passwordError = assertValidPassword(password);
+  if (passwordError) {
+    return res.status(400).json({ error: passwordError });
+  }
+
+  try {
+    const existing = await getUserByUsername(username);
+    if (existing) {
+      return res.status(409).json({ error: "Username already exists." });
+    }
+
+    const userCode = await generateUniqueUserCode();
+    const passwordParts = hashPassword(password);
+    const user = await createUser({
+      username,
+      passwordHash: passwordParts.hash,
+      passwordSalt: passwordParts.salt,
+      userCode
+    });
+
+    if (guestCode) {
+      await linkGuestCodeToUser(user.userId, guestCode);
+      await backfillHistoryForGuestCode(user.userId, guestCode);
+    }
+
+    const session = await createSession(user.userId, SESSION_TTL_MS);
+    attachSessionCookie(res, session.sessionId, session.expiresAt);
+
+    return res.status(201).json({
+      user: {
+        id: user.userId,
+        username: user.username,
+        userCode: user.userCode
+      }
+    });
+  } catch (error) {
+    console.error("[auth] signup failed", error);
+    return res.status(500).json({ error: "Could not create account." });
+  }
+});
+
+gameRouter.post("/api/auth/login", async (req, res) => {
+  const username = String(req.body?.username || "").trim().toLowerCase();
+  const password = String(req.body?.password || "");
+  const guestCode = normalizeGuestCode(req.body?.guestCode || "");
+
+  try {
+    const user = await getUserByUsername(username);
+    if (!user) {
+      return res.status(401).json({ error: "Invalid credentials." });
+    }
+
+    const passwordOk = verifyPassword(password, user.password_salt, user.password_hash);
+    if (!passwordOk) {
+      return res.status(401).json({ error: "Invalid credentials." });
+    }
+
+    if (guestCode) {
+      const linkResult = await linkGuestCodeToUser(user.user_id, guestCode);
+      if (linkResult.linked) {
+        await backfillHistoryForGuestCode(user.user_id, guestCode);
+      }
+    }
+
+    const session = await createSession(user.user_id, SESSION_TTL_MS);
+    attachSessionCookie(res, session.sessionId, session.expiresAt);
+
+    return res.json({
+      user: {
+        id: user.user_id,
+        username: user.username,
+        userCode: user.user_code
+      }
+    });
+  } catch (error) {
+    console.error("[auth] login failed", error);
+    return res.status(500).json({ error: "Could not sign in." });
+  }
+});
+
+gameRouter.post("/api/auth/logout", async (req, res) => {
+  try {
+    const cookies = parseCookies(req.headers.cookie || "");
+    const sessionId = String(cookies[SESSION_COOKIE_NAME] || "").trim();
+    if (sessionId) {
+      await deleteSession(sessionId);
+    }
+    clearSessionCookie(res);
+    return res.json({ ok: true });
+  } catch (error) {
+    console.error("[auth] logout failed", error);
+    return res.status(500).json({ error: "Could not sign out." });
+  }
+});
+
+gameRouter.get("/api/auth/me", async (req, res) => {
+  try {
+    if (!req.auth?.userId) {
+      return res.status(401).json({ error: "Not authenticated." });
+    }
+    const user = await getUserById(req.auth.userId);
+    if (!user) {
+      clearSessionCookie(res);
+      return res.status(401).json({ error: "Not authenticated." });
+    }
+    return res.json({
+      user: {
+        id: user.user_id,
+        username: user.username,
+        userCode: user.user_code
+      }
+    });
+  } catch (error) {
+    console.error("[auth] me failed", error);
+    return res.status(500).json({ error: "Could not load account." });
+  }
 });
 
 gameRouter.get("/api/lobbies", (_req, res) => {
@@ -145,16 +385,20 @@ gameRouter.get("/api/games", (_req, res) => {
 });
 
 gameRouter.get("/api/games/history", async (req, res) => {
-  const browserId = String(req.query?.browserId || "").trim();
-  if (!browserId) {
-    return res.status(400).json({ error: "browserId is required." });
-  }
-
   const limit = Number(req.query?.limit || 30);
   const offset = Number(req.query?.offset || 0);
 
   try {
-    const history = await listHistoryForBrowser(browserId, { limit, offset });
+    let history = null;
+    if (req.auth?.userId) {
+      history = await listHistoryForUser(req.auth.userId, { limit, offset });
+    } else {
+      const browserId = String(req.query?.browserId || "").trim();
+      if (!browserId) {
+        return res.status(400).json({ error: "browserId is required." });
+      }
+      history = await listHistoryForBrowser(browserId, { limit, offset });
+    }
     return res.json(history);
   } catch (error) {
     console.error("[history] list failed", error);
@@ -163,13 +407,17 @@ gameRouter.get("/api/games/history", async (req, res) => {
 });
 
 gameRouter.get("/api/games/history/:id", async (req, res) => {
-  const browserId = String(req.query?.browserId || "").trim();
-  if (!browserId) {
-    return res.status(400).json({ error: "browserId is required." });
-  }
-
   try {
-    const detail = await getHistoryGameForBrowser(browserId, req.params.id);
+    let detail = null;
+    if (req.auth?.userId) {
+      detail = await getHistoryGameForUser(req.auth.userId, req.params.id);
+    } else {
+      const browserId = String(req.query?.browserId || "").trim();
+      if (!browserId) {
+        return res.status(400).json({ error: "browserId is required." });
+      }
+      detail = await getHistoryGameForBrowser(browserId, req.params.id);
+    }
     if (!detail) {
       return res.status(404).json({ error: "Historical game not found." });
     }
@@ -187,7 +435,8 @@ gameRouter.post("/api/lobbies", (req, res) => {
     null,
     req.body?.lobbyName || null,
     null,
-    req.body?.browserId || ""
+    req.body?.browserId || "",
+    req.auth?.userId || ""
   );
   if (result.error) {
     logDebug("create lobby failed", { error: result.error, body: req.body || {} });
@@ -212,7 +461,8 @@ gameRouter.get("/api/lobbies/:id", (req, res) => {
 gameRouter.post("/api/lobbies/:id/join", (req, res) => {
   const result = joinLobby(req.params.id, req.body?.name, {
     viaInvite: Boolean(req.body?.viaInvite),
-    browserId: req.body?.browserId || ""
+    browserId: req.body?.browserId || "",
+    userId: req.auth?.userId || ""
   });
   if (result.error) {
     logDebug("join lobby failed", { lobbyId: req.params.id, error: result.error, body: req.body || {} });
@@ -235,6 +485,30 @@ const io = new Server(server, {
     origin: "*"
   },
   path: `/${GAME_NAME}/socket.io`
+});
+
+io.use(async (socket, next) => {
+  try {
+    const cookies = parseCookies(socket.handshake?.headers?.cookie || "");
+    const sessionId = String(cookies[SESSION_COOKIE_NAME] || "").trim();
+    if (!sessionId) {
+      socket.data.authUserId = null;
+      next();
+      return;
+    }
+    const session = await getSession(sessionId);
+    if (!session) {
+      socket.data.authUserId = null;
+      next();
+      return;
+    }
+    socket.data.authUserId = session.user_id;
+    next();
+  } catch (error) {
+    console.error("[auth] socket middleware failed", error);
+    socket.data.authUserId = null;
+    next();
+  }
 });
 
 async function emitGameStateToLobby(lobbyId) {
@@ -1012,6 +1286,17 @@ io.on("connection", (socket) => {
       return;
     }
 
+    if (player.userId && player.userId !== socket.data.authUserId) {
+      logDebug("join-lobby failed", {
+        socketId: socket.id,
+        lobbyId,
+        playerId,
+        reason: "Authenticated account does not own this player"
+      });
+      if (ack) ack({ ok: false, error: "You do not own this player session." });
+      return;
+    }
+
     socket.join(lobbyId);
     socket.data.lobbyId = lobbyId;
     socket.data.playerId = playerId;
@@ -1027,7 +1312,7 @@ io.on("connection", (socket) => {
 
   socket.on("update-settings", (payload, ack) => {
     const lobbyId = payload?.lobbyId || socket.data.lobbyId;
-    const playerId = payload?.playerId || socket.data.playerId;
+    const playerId = socket.data.playerId;
     const result = updateLobbySettings(lobbyId, playerId, payload?.settings || {});
 
     if (result.error) {
@@ -1043,7 +1328,7 @@ io.on("connection", (socket) => {
 
   socket.on("update-lobby-name", (payload, ack) => {
     const lobbyId = payload?.lobbyId || socket.data.lobbyId;
-    const playerId = payload?.playerId || socket.data.playerId;
+    const playerId = socket.data.playerId;
     const result = updateLobbyName(lobbyId, playerId, payload?.name);
 
     if (result.error) {
@@ -1059,7 +1344,7 @@ io.on("connection", (socket) => {
 
   socket.on("lobby:add-ai-agent", (payload, ack) => {
     const lobbyId = payload?.lobbyId || socket.data.lobbyId;
-    const playerId = payload?.playerId || socket.data.playerId;
+    const playerId = socket.data.playerId;
     const result = addAIAgent(lobbyId, playerId, payload?.aiPassword || "");
 
     if (result.error) {
@@ -1075,7 +1360,7 @@ io.on("connection", (socket) => {
 
   socket.on("start-game", (payload, ack) => {
     const lobbyId = payload?.lobbyId || socket.data.lobbyId;
-    const playerId = payload?.playerId || socket.data.playerId;
+    const playerId = socket.data.playerId;
     const result = startGame(lobbyId, playerId);
 
     if (result.error) {
@@ -1100,7 +1385,7 @@ io.on("connection", (socket) => {
 
   socket.on("game:get-state", async (payload, ack) => {
     const lobbyId = payload?.lobbyId || socket.data.lobbyId;
-    const playerId = payload?.playerId || socket.data.playerId;
+    const playerId = socket.data.playerId;
     const game = getGame(lobbyId);
     if (!game) {
       if (ack) ack({ ok: false, error: "Game not started." });
@@ -1114,7 +1399,7 @@ io.on("connection", (socket) => {
 
   socket.on("game:submit-clue", async (payload, ack) => {
     const lobbyId = payload?.lobbyId || socket.data.lobbyId;
-    const playerId = payload?.playerId || socket.data.playerId;
+    const playerId = socket.data.playerId;
     const game = getGame(lobbyId);
     const result = submitClue(game, playerId, payload || {});
     if (result.error) {
@@ -1169,7 +1454,7 @@ io.on("connection", (socket) => {
 
   socket.on("game:send-message", async (payload, ack) => {
     const lobbyId = payload?.lobbyId || socket.data.lobbyId;
-    const playerId = payload?.playerId || socket.data.playerId;
+    const playerId = socket.data.playerId;
     const game = getGame(lobbyId);
     const result = validateChatMessage(game, playerId, payload?.message);
     if (result.error) {
@@ -1194,7 +1479,7 @@ io.on("connection", (socket) => {
 
   socket.on("game:mark-card", async (payload, ack) => {
     const lobbyId = payload?.lobbyId || socket.data.lobbyId;
-    const playerId = payload?.playerId || socket.data.playerId;
+    const playerId = socket.data.playerId;
     const game = getGame(lobbyId);
     const result = toggleMark(game, playerId, payload?.cardIndex);
     if (result.error) {
@@ -1208,7 +1493,7 @@ io.on("connection", (socket) => {
 
   socket.on("game:guess-card", async (payload, ack) => {
     const lobbyId = payload?.lobbyId || socket.data.lobbyId;
-    const playerId = payload?.playerId || socket.data.playerId;
+    const playerId = socket.data.playerId;
     const game = getGame(lobbyId);
     const result = guessCard(game, playerId, payload?.cardIndex);
     if (result.error) {
@@ -1229,7 +1514,7 @@ io.on("connection", (socket) => {
 
   socket.on("game:ready-next-phase", async (payload, ack) => {
     const lobbyId = payload?.lobbyId || socket.data.lobbyId;
-    const playerId = payload?.playerId || socket.data.playerId;
+    const playerId = socket.data.playerId;
     const game = getGame(lobbyId);
     const result = markPlayerReadyForNextPhase(game, playerId);
     if (result.error) {
@@ -1253,7 +1538,7 @@ io.on("connection", (socket) => {
 
   socket.on("game:request-rematch", async (payload, ack) => {
     const lobbyId = payload?.lobbyId || socket.data.lobbyId;
-    const playerId = payload?.playerId || socket.data.playerId;
+    const playerId = socket.data.playerId;
     const playerColor = payload?.playerColor || null;
     const game = getGame(lobbyId);
 
@@ -1304,7 +1589,8 @@ io.on("connection", (socket) => {
         clonedSettings,
         lobby.name || null,
         playerColor || player.color || null,
-        player.browserId || ""
+        player.browserId || "",
+        player.userId || ""
       );
       if (result.error) {
         if (ack) ack({ ok: false, error: result.error });
@@ -1350,7 +1636,8 @@ io.on("connection", (socket) => {
       const joinResult = joinLobby(game.rematchLobbyId, player.name, {
         viaInvite: true,
         preferredColor: playerColor || player.color || null,
-        browserId: player.browserId || ""
+        browserId: player.browserId || "",
+        userId: player.userId || ""
       });
       if (joinResult.error) {
         if (ack) ack({ ok: false, error: joinResult.error });
@@ -1371,7 +1658,7 @@ io.on("connection", (socket) => {
 
   socket.on("kick-player", async (payload, ack) => {
     const lobbyId = payload?.lobbyId || socket.data.lobbyId;
-    const hostId = payload?.playerId || socket.data.playerId;
+    const hostId = socket.data.playerId;
     const targetPlayerId = payload?.targetPlayerId;
 
     const result = kickPlayer(lobbyId, hostId, targetPlayerId);
@@ -1407,7 +1694,7 @@ io.on("connection", (socket) => {
 
   socket.on("leave-lobby", async (payload, ack) => {
     const lobbyId = payload?.lobbyId || socket.data.lobbyId;
-    const playerId = payload?.playerId || socket.data.playerId;
+    const playerId = socket.data.playerId;
 
     if (!lobbyId || !playerId) {
       logDebug("leave-lobby failed", { socketId: socket.id, lobbyId, playerId, reason: "Missing data" });
@@ -1449,7 +1736,7 @@ io.on("connection", (socket) => {
 
   socket.on("game:quit", async (payload, ack) => {
     const lobbyId = payload?.lobbyId || socket.data.lobbyId;
-    const playerId = payload?.playerId || socket.data.playerId;
+    const playerId = socket.data.playerId;
 
     if (!lobbyId || !playerId) {
       if (ack) ack({ ok: false, error: "Missing lobby or player." });
@@ -1500,6 +1787,7 @@ async function bootstrap() {
     setInterval(async () => {
       try {
         await pruneExpiredGames();
+        await pruneExpiredSessions();
       } catch (error) {
         console.error("[history] prune failed", error);
       }

@@ -18,7 +18,8 @@ Realtime multiplayer Codenames-inspired party game with private/public lobbies, 
 - Rematch flow: host creates a new lobby with same settings and name, other players see a popup and can join with one click
 - Spectator mode for watching live games
 - Reconnect on page refresh (player identity stored in localStorage per lobby)
-- Persistent finished-game history per browser, shown on the landing page
+- Guest and account modes: signup/login with secure cookie session, guest play still supported
+- Persistent finished-game history per browser (guest) or per account (logged in), shown on the landing page
 - Bilingual: board word language per lobby (`en`/`de`) + UI language toggle (`en`/`de`)
 - Optional AI clue agent (Claude Code CLI) that can be added by host in lobby (max 1 AI per game)
 
@@ -230,20 +231,25 @@ The same replay overview is also available on the final game overview screen (`G
 
 ## Lobby & Session Flow
 
-1. **Create lobby** (`POST /api/lobbies`) — body includes `name` (player, `2-25` chars), `visibility`, `lobbyName`, and `browserId`; returns `lobbyId` + `playerId` (host)
-2. **Join lobby** (`POST /api/lobbies/:id/join`) — body includes `name` (`2-25` chars), `viaInvite`, and `browserId`; returns `playerId` for the new player (lobby hard limit: 8 players)
-3. **Connect socket** (`join-lobby` event) — joins the Socket.io room, marks player connected
-4. **Start game** (`start-game` event) — host only, requires 2+ players
-5. **Play** — game state pushed to each player via `game-state` with role-appropriate views
-6. **Game over** — podium screen with stats; host can create a rematch lobby
-7. **Quit game (explicit)** — player is removed from the active game and sent back to landing; if the host quits, host role is reassigned to the first remaining player
-8. **Disconnect** — player marked offline but not removed; reconnect via stored `playerId` in localStorage
+1. **First visit (guest bootstrap)** — client creates and stores a 128-char lowercase hex guest code in `localStorage` (`browserId`).
+2. **Optional account auth** — user can sign up or log in with `username + password`; server creates an `httpOnly` session cookie.
+3. **Guest-to-account link** — on signup/login, server links the current browser guest code to the account and backfills old history to that account.
+4. **Create lobby** (`POST /api/lobbies`) — body includes `name` (player, `2-25` chars), `visibility`, `lobbyName`, and `browserId`; returns `lobbyId` + `playerId` (host).
+5. **Join lobby** (`POST /api/lobbies/:id/join`) — body includes `name` (`2-25` chars), `viaInvite`, and `browserId`; returns `playerId` for the new player (lobby hard limit: 8 players).
+6. **Connect socket** (`join-lobby` event) — joins the Socket.io room, marks player connected; authenticated players are ownership-checked against the account in the session cookie.
+7. **Start game** (`start-game` event) — host only, requires 2+ players.
+8. **Play** — game state pushed to each player via `game-state` with role-appropriate views.
+9. **Game over** — podium screen with stats; host can create a rematch lobby.
+10. **Quit game (explicit)** — player is removed from the active game and sent back to landing; if the host quits, host role is reassigned to the first remaining player.
+11. **Disconnect** — player marked offline but not removed; reconnect via stored `playerId` in localStorage.
 
 If explicit quits reduce active players below 2, the game ends immediately as incomplete (`finishedReason: "insufficient_players"`).
 
-Player identity is stored in `localStorage` as a map of `lobbyId -> playerId`, allowing reconnect on page refresh and tracking "Your Games" on the landing page.
+Player reconnect identity is stored in `localStorage` as a map of `lobbyId -> playerId`, allowing reconnect on page refresh and tracking "Your Games" on the landing page.
 
-A persistent browser-scoped `browserId` is also stored in `localStorage` and used to load finished games from server storage in the `Past Games` section.
+A persistent browser-scoped `browserId` (guest code) is also stored in `localStorage`. It is used for guest history and linked to account history after signup/login.
+
+Auth sessions are cookie-based (`httpOnly`, `SameSite=Lax`), so auth secrets are not stored in `localStorage`.
 
 ## API & Realtime Contracts
 
@@ -251,10 +257,14 @@ A persistent browser-scoped `browserId` is also stored in `localStorage` and use
 
 | Method | Path | Description |
 |--------|------|-------------|
+| `POST` | `/api/auth/signup` | Create account (`username`, `password`, optional `guestCode`) and start session |
+| `POST` | `/api/auth/login` | Log in (`username`, `password`, optional `guestCode`) and start session |
+| `POST` | `/api/auth/logout` | End current session |
+| `GET` | `/api/auth/me` | Get authenticated user for current session cookie |
 | `GET` | `/api/lobbies` | List public waiting lobbies |
 | `GET` | `/api/games` | List public in-progress games |
-| `GET` | `/api/games/history?browserId=...` | List finished games for this browser |
-| `GET` | `/api/games/history/:id?browserId=...` | Get archived finished game details |
+| `GET` | `/api/games/history?browserId=...` | Guest: list finished games for this browser; Authenticated: returns account history |
+| `GET` | `/api/games/history/:id?browserId=...` | Guest: load archived game by browser; Authenticated: load from account history |
 | `POST` | `/api/lobbies` | Create lobby (body: `name`, `visibility`, `lobbyName`, `browserId`) |
 | `GET` | `/api/lobbies/:id` | Get lobby + game status |
 | `POST` | `/api/lobbies/:id/join` | Join lobby (body: `name`, `viaInvite`, `browserId`) |
@@ -305,15 +315,18 @@ codename-competition/
       styles/tokens.css      # CSS custom properties (colors, spacing, fonts)
       lib/
         api.js              # REST client (fetch wrappers)
+        auth.js             # lightweight cached auth user helpers
         socket.js           # Socket.io client singleton
         i18n.jsx            # I18n context provider + translation maps (en/de)
         gameViewModel.js    # Card CSS class logic + marker name resolution
-        session.js          # localStorage read/write for playerId per lobby
+        session.js          # localStorage read/write for playerId per lobby + browser guest code
       components/
         common/LanguageToggle.jsx   # UI language switcher
         game/StatsChips.jsx         # Colored stat badges (correct/neutral/red/black)
       pages/
         LandingPage.jsx     # Create/join lobbies, see active games, rejoin yours
+        LoginPage.jsx       # Username/password login
+        SignupPage.jsx      # Username/password registration
         LobbyPage.jsx       # Lobby waiting room, settings, player list, invite link
         GamePage.jsx        # Active game board + chat + game-over podium
   server/
@@ -346,7 +359,8 @@ Global toggle in top-right corner. Switches all interface text between English a
 - **Empty/failed build after refactor** — Run `npm run build` in `client/` and `node --check server/src/*.js`.
 - **Words not changing by language** — Verify `wordLanguage` is saved in lobby settings before starting. Ensure word files exist with 25+ lines.
 - **Player can't rejoin after refresh** — Check that `localStorage` has the `lobbyPlayers` entry for that lobby. The server keeps the player slot on disconnect; only explicit `leave-lobby` removes it.
-- **Past games missing** — Check that `localStorage` still contains the same `browserId`; clearing site storage creates a new browser identity.
+- **Past games missing (guest mode)** — Check that `localStorage` still contains the same `browserId`; clearing site storage creates a new browser identity.
+- **Past games missing (account mode)** — Confirm you are logged into the same account (`/api/auth/me`) and that signup/login was done from the browser whose guest history should be merged.
 - **Game state not updating** — Verify the socket is connected and joined to the correct lobby room. Check browser console for socket errors.
 - **Deploy fails with missing Claude token file** — Create `/home/pi/.claude-oauth` and place only the OAuth token string in the file (no `export`, no quotes), then rerun `deploy-pi.sh`.
 - **Claude runs manually but fails in systemd service** — Ensure the generated service has `ProtectHome=false` so the runtime user can access home-based Claude auth/config files.
