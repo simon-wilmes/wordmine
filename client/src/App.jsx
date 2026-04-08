@@ -1,5 +1,5 @@
 import { Navigate, Route, Routes } from "react-router-dom";
-import LanguageToggle from "./components/common/LanguageToggle";
+import TopRightControls from "./components/common/TopRightControls";
 import { I18nProvider } from "./lib/i18n";
 import LandingPage from "./pages/LandingPage";
 import LobbyPage from "./pages/LobbyPage";
@@ -9,7 +9,7 @@ import NewLandingPage from "./pages/NewLandingPage";
 export default function App() {
   return (
     <I18nProvider>
-      <LanguageToggle />
+      <TopRightControls />
       <Routes>
         <Route path="/" element={<NewLandingPage />} />
         <Route path="/landing" element={<NewLandingPage />} />

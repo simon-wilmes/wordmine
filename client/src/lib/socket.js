@@ -1,6 +1,6 @@
 import { io } from "socket.io-client";
 
-const gameName = import.meta.env.VITE_GAME_NAME || "wordmine";
+const gameName = import.meta.env.VITE_GAME_NAME || "cluey";
 
 let socket;
 

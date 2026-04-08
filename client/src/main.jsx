@@ -6,7 +6,7 @@ import "./styles.css";
 
 ReactDOM.createRoot(document.getElementById("root")).render(
   <React.StrictMode>
-    <BrowserRouter basename={`/${import.meta.env.VITE_GAME_NAME || "wordmine"}`}>
+    <BrowserRouter basename={`/${import.meta.env.VITE_GAME_NAME || "cluey"}`}>
       <App />
     </BrowserRouter>
   </React.StrictMode>

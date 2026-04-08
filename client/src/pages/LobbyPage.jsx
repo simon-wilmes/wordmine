@@ -361,7 +361,7 @@ export default function LobbyPage() {
 
   async function copyInviteLink() {
     if (!lobby?.id) return;
-    const link = `${window.location.origin}/${import.meta.env.VITE_GAME_NAME || "wordmine"}/lobbies?join=${lobby.id}&joinSource=invite`;
+    const link = `${window.location.origin}/${import.meta.env.VITE_GAME_NAME || "cluey"}/lobbies?join=${lobby.id}&joinSource=invite`;
     try {
       await navigator.clipboard.writeText(link);
       setCopiedInvite(true);
@@ -392,7 +392,7 @@ export default function LobbyPage() {
     );
   }
 
-  const inviteLink = `${window.location.origin}/${import.meta.env.VITE_GAME_NAME || "wordmine"}/lobbies?join=${lobby.id}&joinSource=invite`;
+  const inviteLink = `${window.location.origin}/${import.meta.env.VITE_GAME_NAME || "cluey"}/lobbies?join=${lobby.id}&joinSource=invite`;
 
   return (
     <main className="page">
@@ -498,13 +498,11 @@ export default function LobbyPage() {
         <div style={{ marginTop: "20px" }}>
           <h2>{t("inviteLink")}</h2>
           <p style={{ color: "var(--text-muted)", fontSize: "0.82rem" }}>{t("inviteHelp")}</p>
-          <div className="button-row">
+          <div className="invite-link-row">
+            <span className="invite-link-display invite-link-display-inline">{inviteLink}</span>
             <button className="ghost" onClick={copyInviteLink} type="button">
               {copiedInvite ? t("copied") : t("copyInviteLink")}
             </button>
-          </div>
-          <div style={{ marginTop: "10px" }}>
-            <span className="invite-link-display">{inviteLink}</span>
           </div>
         </div>
       </section>

@@ -1,4 +1,4 @@
-# Codename Competition aka Wordmine
+# Codename Competition aka Cluey
 
 Realtime multiplayer Codenames-inspired party game with private/public lobbies, invite links, host-configurable rules, per-round scoring, in-game chat, and bilingual support (English/German).
 
@@ -21,6 +21,7 @@ Realtime multiplayer Codenames-inspired party game with private/public lobbies, 
 - Reconnect on page refresh (player identity stored in localStorage per lobby)
 - Persistent finished-game history per browser, shown on the landing page
 - Bilingual: board word language per lobby (`en`/`de`) + UI language toggle (`en`/`de`)
+- Global `Rules` popup next to the language control (available on all app routes) with bilingual tabs for quick start, core rules, scoring/modes, card-type legend, and suggested visual references
 - Optional AI clue agent (Claude Code CLI) that can be added by host in lobby (max 1 AI per game)
 
 ## Tech Stack
@@ -30,7 +31,7 @@ Realtime multiplayer Codenames-inspired party game with private/public lobbies, 
 - **State:** In-memory for active sessions + SQLite archive for finished games
 - **Styling:** Plain CSS with design tokens (`styles/tokens.css`)
 - **i18n:** Custom context-based provider (`lib/i18n.jsx`), no external library
-- **Production:** Server serves built client at `/${GAME_NAME}` (default: `/wordmine`), configured for Cloudflare Tunnel via `https://games.wilmes.dev`
+- **Production:** Server serves built client at `/${GAME_NAME}` (default: `/cluey`), configured for Cloudflare Tunnel via `https://wilmes.dev/cluey/`
 
 ## Quick Start
 
@@ -59,10 +60,10 @@ Client default: `http://localhost:5173`
 The game name prefix is defined in `.env` at the project root:
 
 ```
-GAME_NAME=wordmine
+GAME_NAME=cluey
 ```
 
-All URLs are served under `/${GAME_NAME}/` (e.g., `/wordmine/`, `/wordmine/lobbies`, `/wordmine/api/...`, `/wordmine/lobby/:id`). Both the production Node server and Vite dev/preview server automatically redirect `/${GAME_NAME}` to `/${GAME_NAME}/` (for example `/wordmine` -> `/wordmine/`) so the app always runs from its canonical base URL. To rename the game, change this single value and restart. No domain is hardcoded — the app works on `localhost`, `games.wilmes.dev`, or any other host.
+All URLs are served under `/${GAME_NAME}/` (e.g., `/cluey/`, `/cluey/lobbies`, `/cluey/api/...`, `/cluey/lobby/:id`). Both the production Node server and Vite dev/preview server automatically redirect `/${GAME_NAME}` to `/${GAME_NAME}/` (for example `/cluey` -> `/cluey/`) so the app always runs from its canonical base URL. To rename the game, change this single value and restart. No domain is hardcoded — the app works on `localhost`, `wilmes.dev`, or any other host.
 
 Cloudflare does not need a special rule for this specific slash redirect when traffic reaches this Node server; the app handles it itself. If you terminate traffic somewhere else before Node, add the equivalent redirect at that layer.
 
@@ -89,7 +90,7 @@ Each round, one player is the clue giver and the rest are guessers. The clue giv
 
 ### Simultaneous Clue Mode (`simultaneousClue: true`)
 
-All players give clues on the same board during a shared clue phase. Then each clue is played out as a sub-round where all other players guess. Total rounds = `cycles` (each round has N sub-rounds where N = playerCount).
+All players give clues simultaneously on their own boards during a shared clue phase. Then each submitted clue is played out one-by-one as a sub-round where all other players guess. Total rounds = `cycles` (each round has N sub-rounds where N = playerCount).
 
 ## Game Rules
 
@@ -125,6 +126,7 @@ Flow per round:
 - AI clue generation uses local Claude Code CLI (not paid API) with language-aware prompts:
   - English prompt for `wordLanguage=en`
   - German prompt for `wordLanguage=de`
+- In simultaneous clue mode (`clue-all`), AI players auto-submit their clues during the shared clue phase so the round can transition without manual AI input
 - Output is validated server-side against live board constraints
 - If invalid, server retries up to 3 times with corrective feedback
 - If still invalid after 3 tries, clue is skipped as if time ran out and round advances
@@ -165,6 +167,7 @@ For each AI clue attempt, server logs include:
 
 - Prompt metadata (`lobbyId`, round, clue giver, language, attempt, latency)
 - Full prompt text (verbatim)
+- Prompt dispatch + waiting logs before CLI execution (`[llm-clue] claude prompt dispatch*`, `[llm-clue] claude awaiting response`) for every Claude call
 - Raw Claude output (verbatim)
 - Parsed JSON output and validation status
 - Retry/failure reason and final status (`submitted` or `skipped_after_retries`)

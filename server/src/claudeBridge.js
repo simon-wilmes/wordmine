@@ -22,6 +22,15 @@ function parseArgsFromEnv() {
   return ["-p", "{prompt}"];
 }
 
+function logLLMDebug(message, payload) {
+  console.log(`[llm-clue] ${message}`, payload ?? "");
+}
+
+function logLLMDebugText(title, value) {
+  const text = String(value || "");
+  console.log(`[llm-clue] ${title}\n${text}`);
+}
+
 async function runClaudePrompt(promptText, options = {}) {
   const command = process.env.CLAUDE_CLI_COMMAND || "claude";
   const timeoutMs = Number(options.timeoutMs || process.env.CLAUDE_CLI_TIMEOUT_MS || 20000);
@@ -39,6 +48,14 @@ async function runClaudePrompt(promptText, options = {}) {
       promptLength: String(promptText || "").length,
       timeoutMs: Math.max(1000, timeoutMs)
     };
+
+    // Always log before spawn so we can see that the request is in-flight.
+    logLLMDebug("claude prompt dispatch", cliMeta);
+    logLLMDebugText("claude prompt dispatch text", promptText);
+    logLLMDebug("claude awaiting response", {
+      command,
+      timeoutMs: Math.max(1000, timeoutMs)
+    });
 
     const child = spawn(command, args, {
       stdio: ["ignore", "pipe", "pipe"]

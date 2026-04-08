@@ -1,7 +1,7 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
-const gameName = process.env.VITE_GAME_NAME || "wordmine";
+const gameName = process.env.VITE_GAME_NAME || "cluey";
 const gameBase = `/${gameName}`;
 
 function redirectBaseWithoutTrailingSlash(req, res, next) {

@@ -1,5 +1,5 @@
 /**
- * AgentCard — Animated ID-badge logo for Operation: Wordmine.
+ * AgentCard — Animated ID-badge logo for Operation: Cluey.
  * Typewriter effect cycles through a pool of spy agents.
  */
 import { useEffect, useRef, useState } from "react";
@@ -130,7 +130,7 @@ export default function AgentCard({ className = "" }) {
     <div className={`agent-card ${className}`}>
       <div className="agent-card__header">
         <span className="agent-card__op-label">OPERATION</span>
-        <span className="agent-card__op-name">WORDMINE</span>
+        <span className="agent-card__op-name">CLUEY</span>
       </div>
 
       <div className="agent-card__stripe" />

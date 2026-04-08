@@ -1,10 +1,10 @@
 import { useI18n } from "../../lib/i18n";
 
-export default function LanguageToggle() {
+export default function LanguageToggle({ renderContainer = true }) {
   const { language, setUiLanguage } = useI18n();
 
-  return (
-    <div className="language-toggle">
+  const buttons = (
+    <>
       <button
         className={`lang-btn${language === "en" ? " active" : ""}`}
         onClick={() => setUiLanguage("en")}
@@ -17,6 +17,16 @@ export default function LanguageToggle() {
       >
         DE
       </button>
+    </>
+  );
+
+  if (!renderContainer) {
+    return buttons;
+  }
+
+  return (
+    <div className="language-toggle">
+      {buttons}
     </div>
   );
 }

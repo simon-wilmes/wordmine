@@ -87,6 +87,8 @@ function buildPrompt({ language, greenWords, redWords, blackWords, previousError
       "- Waehle targetWords nur aus der gruenden Liste.",
       "- Vermeide rote Karten, und vermeide schwarze Karten auf jeden Fall.",
       "- Wenn ein grosser Hinweis unsicher ist, nimm lieber weniger sichere Zielwoerter.",
+      "- Pruefe VOR dem Antworten jedes Wort in targetWords: es muss exakt (gleiche Schreibweise) in 'Gruene Woerter' vorkommen.",
+      "- Wenn ein targetWord nicht exakt in 'Gruene Woerter' steht oder in Rot/Schwarz vorkommt, entferne es aus targetWords.",
       "",
       `Gruene Woerter (erlaubte Ziele): ${list(greenWords)}`,
       `Rote Woerter (vermeiden): ${list(redWords)}`,
@@ -105,6 +107,8 @@ function buildPrompt({ language, greenWords, redWords, blackWords, previousError
     "- targetWords must be chosen only from the green list.",
     "- Avoid red cards and absolutely avoid black cards.",
     "- If a large clue is risky or unclear, prefer fewer safer target words.",
+    "- Before replying, check every word in targetWords: it must exactly match (same spelling) a word in 'Green words'.",
+    "- If a targetWord is not an exact green-list match, or appears in red/black lists, remove it from targetWords.",
     "",
     `Green words (allowed targets): ${list(greenWords)}`,
     `Red words (avoid): ${list(redWords)}`,
@@ -165,9 +169,11 @@ function getWordsByRole(cards, role) {
   return cards.filter((card) => card.role === role).map((card) => card.word);
 }
 
-async function generateAIAgentClueAttempt({ game, lobbyId, attempt, previousError }) {
+async function generateAIAgentClueAttempt({ game, lobbyId, attempt, previousError, clueGiverId, boardCards }) {
   const round = game?.round;
-  const cards = round?.board?.cards || [];
+  const cards = Array.isArray(boardCards) && boardCards.length > 0
+    ? boardCards
+    : (round?.board?.cards || []);
   const language = String(game?.config?.wordLanguage || "en").toLowerCase() === "de" ? "de" : "en";
 
   const prompt = buildPrompt({
@@ -181,7 +187,7 @@ async function generateAIAgentClueAttempt({ game, lobbyId, attempt, previousErro
   const meta = {
     lobbyId,
     roundNumber: game?.roundNumber,
-    clueGiverId: round?.clueGiverId,
+    clueGiverId: clueGiverId || round?.clueGiverId,
     wordLanguage: language,
     attempt
   };
@@ -248,6 +254,8 @@ function buildGuessPrompt({
       "- Gib eine geordnete Liste von Woertern zur Auswahl nach Wahrscheinlichkeit.",
       "- Wenn unsicher, gib lieber weniger Woerter.",
       "- Nutze nur Woerter, die auf dem Board stehen und noch nicht geraten wurden.",
+      "- Pruefe VOR dem Antworten jedes Wort in guesses: es muss exakt (gleiche Schreibweise) in 'Board-Woerter' vorkommen.",
+      "- Wenn ein Wort nicht exakt auf dem Board steht, entferne es aus guesses.",
       "",
       `Hinweis: '${clue}' x${clueCount}`,
       `Verbleibende moegliche Klicks in dieser Runde: ${remainingGuesses}`,
@@ -268,6 +276,8 @@ function buildGuessPrompt({
     "- Return an ordered list of words to click by likelihood.",
     "- If uncertain, return fewer words.",
     "- Use only words present on the board that have not been guessed yet.",
+    "- Before replying, check every word in guesses: it must exactly match (same spelling) a word in 'Board words'.",
+    "- If a word is not an exact match to a board word, remove it from guesses.",
     "",
     `Clue: '${clue}' x${clueCount}`,
     `Remaining possible clicks this round: ${remainingGuesses}`,

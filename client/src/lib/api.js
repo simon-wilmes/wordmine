@@ -1,4 +1,4 @@
-const API_BASE = `/${import.meta.env.VITE_GAME_NAME || "wordmine"}`;
+const API_BASE = `/${import.meta.env.VITE_GAME_NAME || "cluey"}`;
 
 async function request(path, options = {}) {
   const res = await fetch(`${API_BASE}${path}`, {

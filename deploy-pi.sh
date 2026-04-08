@@ -66,7 +66,7 @@ rsync -a --exclude='node_modules' --exclude='.git' "$SCRIPT_DIR/" "$APP_DIR/"
 
 # --- Create .env if missing ---
 if [[ ! -f "$APP_DIR/.env" ]]; then
-  echo "GAME_NAME=wordmine" > "$APP_DIR/.env"
+  echo "GAME_NAME=cluey" > "$APP_DIR/.env"
 fi
 
 # Default Claude CLI timeout for slower hosts like Raspberry Pi.

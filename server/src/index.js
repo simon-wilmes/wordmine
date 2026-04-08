@@ -51,7 +51,7 @@ const {
 const { generateAIAgentClueAttempt, generateAIAgentGuessPlan } = require("./llmClueService");
 
 const PORT = process.env.PORT || 3001;
-const GAME_NAME = process.env.GAME_NAME || "wordmine";
+const GAME_NAME = process.env.GAME_NAME || "cluey";
 const HISTORY_RETENTION_DAYS = Number(process.env.GAME_HISTORY_RETENTION_DAYS || 90);
 const HISTORY_PRUNE_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const DEBUG = String(process.env.SERVER_DEBUG || "false").toLowerCase() === "true";
@@ -118,7 +118,7 @@ app.use((req, _res, next) => {
 });
 
 // Canonicalize the game base URL so clients always load from /<game>/.
-// Express non-strict routing matches both /wordmine and /wordmine/ for this route,
+// Express non-strict routing matches both /cluey and /cluey/ for this route,
 // so guard against redirecting when the trailing slash is already present.
 app.get(`/${GAME_NAME}`, (req, res, next) => {
   if (req.path.endsWith("/")) return next();
@@ -397,6 +397,107 @@ function clearClueTimersForGame(game) {
   }
 }
 
+async function runAIAgentClueSubmissionCore({
+  lobbyId,
+  aiPlayerId,
+  label,
+  isStillValid,
+  getBoardCards,
+  beforeSubmit
+}) {
+  const maxAttempts = 3;
+  let previousError = "";
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const liveGame = getGame(lobbyId);
+    if (!isStillValid(liveGame)) {
+      return { submitted: false, aborted: true, lastError: previousError || null };
+    }
+
+    let proposal;
+    try {
+      proposal = await generateAIAgentClueAttempt({
+        game: liveGame,
+        lobbyId,
+        attempt,
+        previousError,
+        clueGiverId: aiPlayerId,
+        boardCards: getBoardCards(liveGame)
+      });
+    } catch (error) {
+      previousError = error?.message || "Claude CLI call failed.";
+      logLLM(`${label} attempt failed before parse`, {
+        lobbyId,
+        roundNumber: liveGame?.roundNumber,
+        aiPlayerId,
+        attempt,
+        error: previousError,
+        ...buildClaudeErrorDiagnostics(error)
+      });
+      continue;
+    }
+
+    logLLM(`${label} attempt meta`, proposal.meta);
+    logLLMText(`${label} prompt attempt ${attempt} for ${aiPlayerId}`, proposal.prompt);
+    logLLMText(`${label} raw output attempt ${attempt} for ${aiPlayerId}`, proposal.rawOutput);
+    logLLM(`${label} parsed attempt`, proposal.parsed);
+
+    if (!proposal.ok) {
+      previousError = proposal.error;
+      logLLM(`${label} attempt rejected`, {
+        lobbyId,
+        roundNumber: liveGame?.roundNumber,
+        aiPlayerId,
+        attempt,
+        reason: proposal.error,
+        status: "invalid-proposal"
+      });
+      continue;
+    }
+
+    if (beforeSubmit) {
+      const beforeSubmitResult = await beforeSubmit({ liveGame, proposal, attempt });
+      if (beforeSubmitResult?.abort) {
+        return { submitted: false, aborted: true, lastError: previousError || null };
+      }
+    }
+
+    const latestBeforeSubmit = getGame(lobbyId);
+    if (!isStillValid(latestBeforeSubmit)) {
+      return { submitted: false, aborted: true, lastError: previousError || null };
+    }
+
+    const submitResult = submitClue(latestBeforeSubmit, aiPlayerId, proposal.payload);
+    if (submitResult.error) {
+      previousError = submitResult.error;
+      logLLM(`${label} submit rejected`, {
+        lobbyId,
+        roundNumber: latestBeforeSubmit?.roundNumber,
+        aiPlayerId,
+        attempt,
+        reason: submitResult.error,
+        status: "engine-rejected"
+      });
+      continue;
+    }
+
+    logLLM(`${label} submitted`, {
+      lobbyId,
+      roundNumber: latestBeforeSubmit?.roundNumber,
+      aiPlayerId,
+      attempt,
+      clue: proposal.payload.clue,
+      clueCount: proposal.payload.clueCount,
+      selectedIndexes: proposal.payload.selectedIndexes,
+      status: "submitted"
+    });
+
+    return { submitted: true, aborted: false, lastError: null };
+  }
+
+  return { submitted: false, aborted: false, lastError: previousError || null };
+}
+
 async function runAIAgentClueTurn(lobbyId) {
   const game = getGame(lobbyId);
   if (!isAIGiverTurn(game)) return;
@@ -404,99 +505,50 @@ async function runAIAgentClueTurn(lobbyId) {
   if (round.aiClueInProgress || round.aiClueResolved) return;
 
   round.aiClueInProgress = true;
-  const maxAttempts = 3;
-  let previousError = "";
 
   try {
-    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-      const liveGame = getGame(lobbyId);
-      if (!liveGame || liveGame.round !== round || !isAIGiverTurn(liveGame)) {
+    const aiPlayerId = round.clueGiverId;
+    const outcome = await runAIAgentClueSubmissionCore({
+      lobbyId,
+      aiPlayerId,
+      label: "standard clue",
+      isStillValid: (liveGame) => Boolean(
+        liveGame
+        && liveGame.round === round
+        && isAIGiverTurn(liveGame)
+      ),
+      getBoardCards: (liveGame) => liveGame?.round?.board?.cards || [],
+      beforeSubmit: async ({ liveGame }) => {
+        const minRevealAt = Number(liveGame.round?.phaseStartedAt || Date.now()) + 5000;
+        const delayMs = Math.max(0, minRevealAt - Date.now());
+        if (delayMs > 0) {
+          logLLM("minimum clue delay", {
+            lobbyId,
+            roundNumber: liveGame.roundNumber,
+            waitMs: delayMs,
+            status: "waiting-before-reveal"
+          });
+          await sleep(delayMs);
+        }
+      }
+    });
+
+    if (outcome.aborted) {
+      return;
+    }
+
+    if (outcome.submitted) {
+      const latest = getGame(lobbyId);
+      if (!latest || latest.round !== round || latest.round.phase !== "guess") {
         return;
       }
 
-      let proposal;
-      try {
-        proposal = await generateAIAgentClueAttempt({
-          game: liveGame,
-          lobbyId,
-          attempt,
-          previousError
-        });
-      } catch (error) {
-        previousError = error?.message || "Claude CLI call failed.";
-        logLLM("attempt failed before parse", {
-          lobbyId,
-          roundNumber: liveGame.roundNumber,
-          attempt,
-          error: previousError,
-          ...buildClaudeErrorDiagnostics(error)
-        });
-        continue;
-      }
-
-      logLLM("attempt meta", proposal.meta);
-      logLLMText(`prompt attempt ${attempt}`, proposal.prompt);
-      logLLMText(`raw output attempt ${attempt}`, proposal.rawOutput);
-      logLLM("parsed attempt", proposal.parsed);
-
-      if (!proposal.ok) {
-        previousError = proposal.error;
-        logLLM("attempt rejected", {
-          lobbyId,
-          roundNumber: liveGame.roundNumber,
-          attempt,
-          reason: proposal.error,
-          status: "invalid-proposal"
-        });
-        continue;
-      }
-
-      logLLM("submit payload", {
-        lobbyId,
-        roundNumber: liveGame.roundNumber,
-        attempt,
-        clue: proposal.payload.clue,
-        clueCount: proposal.payload.clueCount,
-        selectedIndexes: proposal.payload.selectedIndexes
-      });
-
-      const minRevealAt = Number(liveGame.round?.phaseStartedAt || Date.now()) + 5000;
-      const delayMs = Math.max(0, minRevealAt - Date.now());
-      if (delayMs > 0) {
-        logLLM("minimum clue delay", {
-          lobbyId,
-          roundNumber: liveGame.roundNumber,
-          waitMs: delayMs,
-          status: "waiting-before-reveal"
-        });
-        await sleep(delayMs);
-      }
-
-      const latestBeforeSubmit = getGame(lobbyId);
-      if (!latestBeforeSubmit || latestBeforeSubmit.round !== round || latestBeforeSubmit.round.phase !== "clue") {
-        return;
-      }
-
-      const delayedSubmit = submitClue(latestBeforeSubmit, latestBeforeSubmit.round.clueGiverId, proposal.payload);
-      if (delayedSubmit.error) {
-        previousError = delayedSubmit.error;
-        logLLM("attempt rejected by game engine after delay", {
-          lobbyId,
-          roundNumber: latestBeforeSubmit.roundNumber,
-          attempt,
-          reason: delayedSubmit.error,
-          status: "engine-rejected-after-delay"
-        });
-        continue;
-      }
-
-      clearClueTimersForGame(latestBeforeSubmit);
+      clearClueTimersForGame(latest);
       scheduleGuessTimer(lobbyId);
       round.aiClueResolved = true;
       logLLM("final status", {
         lobbyId,
-        roundNumber: liveGame.roundNumber,
-        attempt,
+        roundNumber: latest.roundNumber,
         status: "submitted"
       });
       await emitGameStateToLobby(lobbyId);
@@ -516,7 +568,7 @@ async function runAIAgentClueTurn(lobbyId) {
       lobbyId,
       roundNumber: latest.roundNumber,
       status: "skipped_after_retries",
-      lastError: previousError || null
+      lastError: outcome.lastError || null
     });
     await emitGameStateToLobby(lobbyId);
   } finally {
@@ -781,6 +833,124 @@ function triggerAIAgentClueIfNeeded(lobbyId) {
   });
 }
 
+function getPendingAIClueAllIds(game) {
+  const round = game?.round;
+  if (!game || !round || round.phase !== "clue-all") return [];
+  const submitted = round.submittedClues || {};
+  return game.players
+    .filter((player) => player.isAI)
+    .map((player) => player.id)
+    .filter((playerId) => !submitted[playerId]);
+}
+
+function buildFallbackCluePayload(board, language) {
+  const cards = board?.cards || [];
+  const firstGreen = cards.find((card) => card.role === "green");
+  if (!firstGreen) return null;
+  return {
+    clue: language === "de" ? "ziel" : "target",
+    clueCount: 1,
+    selectedIndexes: [firstGreen.index]
+  };
+}
+
+async function runAIClueAllSubmissions(lobbyId) {
+  const game = getGame(lobbyId);
+  if (!game?.round || game.round.phase !== "clue-all") return;
+  const round = game.round;
+  if (round.aiClueAllInProgress) return;
+  round.aiClueAllInProgress = true;
+
+  try {
+    const aiIds = getPendingAIClueAllIds(game);
+    for (const aiPlayerId of aiIds) {
+      const outcome = await runAIAgentClueSubmissionCore({
+        lobbyId,
+        aiPlayerId,
+        label: "simul clue-all",
+        isStillValid: (liveGame) => Boolean(
+          liveGame
+          && liveGame.round === round
+          && liveGame.round.phase === "clue-all"
+          && !liveGame.round.submittedClues?.[aiPlayerId]
+        ),
+        getBoardCards: (liveGame) => {
+          const personalBoard = liveGame.round.boardsByPlayerId?.[aiPlayerId] || liveGame.round.board;
+          return personalBoard?.cards || [];
+        }
+      });
+
+      if (outcome.aborted) {
+        return;
+      }
+
+      if (!outcome.submitted) {
+        const liveGame = getGame(lobbyId);
+        if (!liveGame?.round || liveGame.round !== round || liveGame.round.phase !== "clue-all") {
+          return;
+        }
+
+        const language = String(liveGame?.config?.wordLanguage || "en").toLowerCase() === "de" ? "de" : "en";
+        const personalBoard = liveGame.round.boardsByPlayerId?.[aiPlayerId] || liveGame.round.board;
+        const fallbackPayload = buildFallbackCluePayload(personalBoard, language);
+        if (fallbackPayload) {
+          const fallbackSubmit = submitClue(liveGame, aiPlayerId, fallbackPayload);
+          if (!fallbackSubmit.error) {
+            submitted = true;
+            logLLM("simul clue-all fallback submitted", {
+              lobbyId,
+              roundNumber: liveGame.roundNumber,
+              aiPlayerId,
+              clue: fallbackPayload.clue,
+              selectedIndexes: fallbackPayload.selectedIndexes
+            });
+          }
+        }
+      }
+    }
+
+    const latest = getGame(lobbyId);
+    if (!latest?.round || latest.round !== round || latest.round.phase !== "clue-all") {
+      return;
+    }
+    const allSubmitted = Object.keys(latest.round.submittedClues || {}).length === latest.players.length;
+    if (allSubmitted) {
+      if (latest?.timers?.clue) {
+        clearTimeout(latest.timers.clue);
+        latest.timers.clue = null;
+      }
+      advanceClueAllToNextPhase(lobbyId, latest);
+    }
+    await emitGameStateToLobby(lobbyId);
+  } finally {
+    round.aiClueAllInProgress = false;
+  }
+}
+
+function triggerAIClueAllIfNeeded(lobbyId) {
+  const game = getGame(lobbyId);
+  if (!game?.round || game.round.phase !== "clue-all") return;
+  if (getPendingAIClueAllIds(game).length === 0) return;
+  runAIClueAllSubmissions(lobbyId).catch((error) => {
+    logLLM("unexpected simul clue-all runner failure", {
+      lobbyId,
+      error: error?.message || String(error)
+    });
+  });
+}
+
+function advanceClueAllToNextPhase(lobbyId, game) {
+  const transitionResult = transitionClueAllToFirstSubRound(game);
+  if (transitionResult.skippedToRoundEnd) {
+    scheduleRoundEndTimer(lobbyId);
+    return { skippedToRoundEnd: true };
+  }
+
+  // Centralized guess-phase entry keeps AI guess triggering consistent.
+  scheduleGuessTimer(lobbyId);
+  return { skippedToRoundEnd: false };
+}
+
 function scheduleGuessTimer(lobbyId) {
   const game = getGame(lobbyId);
   if (!game || !game.round || game.round.phase !== "guess") {
@@ -849,7 +1019,10 @@ function scheduleClueTimer(lobbyId) {
 function scheduleClueAllTimer(lobbyId) {
   const game = getGame(lobbyId);
   if (!game?.round || game.round.phase !== "clue-all") return;
-  if ((game.config?.cluePhaseSeconds || 0) <= 0) return;
+  if ((game.config?.cluePhaseSeconds || 0) <= 0) {
+    triggerAIClueAllIfNeeded(lobbyId);
+    return;
+  }
 
   if (game.timers.clue) {
     clearTimeout(game.timers.clue);
@@ -859,14 +1032,11 @@ function scheduleClueAllTimer(lobbyId) {
   game.timers.clue = setTimeout(async () => {
     const liveGame = getGame(lobbyId);
     if (!liveGame?.round || liveGame.round.phase !== "clue-all") return;
-    const result = transitionClueAllToFirstSubRound(liveGame);
-    if (result.skippedToRoundEnd) {
-      scheduleRoundEndTimer(lobbyId);
-    } else {
-      scheduleGuessTimer(lobbyId);
-    }
+    advanceClueAllToNextPhase(lobbyId, liveGame);
     await emitGameStateToLobby(lobbyId);
   }, waitMs);
+
+  triggerAIClueAllIfNeeded(lobbyId);
 }
 
 function scheduleRoundEndTimer(lobbyId) {
@@ -1169,12 +1339,9 @@ io.on("connection", (socket) => {
           clearTimeout(game.timers.clue);
           game.timers.clue = null;
         }
-        const transitionResult = transitionClueAllToFirstSubRound(game);
-        if (transitionResult.skippedToRoundEnd) {
-          scheduleRoundEndTimer(lobbyId);
-        } else {
-          scheduleGuessTimer(lobbyId);
-        }
+        advanceClueAllToNextPhase(lobbyId, game);
+      } else {
+        triggerAIClueAllIfNeeded(lobbyId);
       }
       await emitGameStateToLobby(lobbyId);
       if (ack) ack({ ok: true });
