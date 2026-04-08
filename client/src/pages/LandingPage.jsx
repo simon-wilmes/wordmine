@@ -85,7 +85,7 @@ function NameModal({ title, submitLabel, onSubmit, onClose, showVisibility, show
 }
 
 export default function LandingPage() {
-  const { t } = useI18n();
+  const { t, language } = useI18n();
   const navigate = useNavigate();
   const [search, setSearch] = useSearchParams();
   const [lobbies, setLobbies] = useState([]);
@@ -228,7 +228,7 @@ export default function LandingPage() {
   }, [search, setSearch, navigate]);
 
   async function handleCreate({ name, visibility, lobbyName }) {
-    const data = await createLobby(name, visibility, lobbyName, browserId);
+    const data = await createLobby(name, visibility, lobbyName, browserId, language);
     setStoredPlayerId(data.lobby.id, data.playerId);
     navigate(`/lobby/${data.lobby.id}`);
   }

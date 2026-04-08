@@ -32,7 +32,7 @@ export default function LobbyPage() {
     visibility: "public",
     gameConfig: {
       wordLanguage: "en",
-      cycles: 1,
+      cycles: 3,
       cluePhaseSeconds: 60,
       guessPhaseSeconds: 60,
       betweenRoundsSeconds: 15,
@@ -44,7 +44,7 @@ export default function LobbyPage() {
       redPenalty: 50,
       blackPenalty: 200,
       penalizeClueGiverForWrongGuesses: true,
-      simultaneousClue: false,
+      simultaneousClue: true,
       greenCards: 14,
       redCards: 10,
       blackCards: 1
@@ -59,16 +59,43 @@ export default function LobbyPage() {
   );
   const isLobbyFull = (lobby?.players?.length || 0) >= MAX_LOBBY_PLAYERS;
   const aiLimitReached = aiCount >= 1;
-  const disableAddAiButton = isAddingAiAgent || lobby?.status !== "waiting" || isLobbyFull || aiLimitReached;
-  const addAiDisabledReason = aiLimitReached
-    ? t("aiAgentLimitReached")
-    : isLobbyFull
-      ? t("lobbyFullMaxPlayers")
-      : "";
-  const settingsDirty = useMemo(() => {
-    if (!lobby?.settings || !draftSettings) return false;
-    return JSON.stringify(lobby.settings) !== JSON.stringify(draftSettings);
-  }, [lobby?.settings, draftSettings]);
+  const disableAddAiButton = isAddingAiAgent || lobby?.status !== "waiting" || isLobbyFull;
+  const addAiDisabledReason = isLobbyFull ? t("lobbyFullMaxPlayers") : "";
+  const generalSettingsDirty = useMemo(() => {
+    if (!lobby?.settings) return false;
+    const draftName = String(draftLobbyName || "").trim();
+    const liveName = String(lobby.name || "").trim();
+    const draftVisibility = String(draftSettings?.visibility || "public");
+    const liveVisibility = String(lobby.settings?.visibility || "public");
+    return draftName !== liveName || draftVisibility !== liveVisibility;
+  }, [draftLobbyName, draftSettings?.visibility, lobby?.name, lobby?.settings]);
+
+  const gameSettingsDirty = useMemo(() => {
+    if (!lobby?.settings?.gameConfig || !draftSettings?.gameConfig) return false;
+    const normalizeGameConfig = (config) => ({
+      wordLanguage: String(config?.wordLanguage || "en"),
+      cycles: Number(config?.cycles),
+      cluePhaseSeconds: Number(config?.cluePhaseSeconds),
+      guessPhaseSeconds: Number(config?.guessPhaseSeconds),
+      betweenRoundsSeconds: Number(config?.betweenRoundsSeconds),
+      clueCardValue: Number(config?.clueCardValue),
+      guesserCardPool: Number(config?.guesserCardPool),
+      rankBonus1: Number(config?.rankBonus1),
+      rankBonus2: Number(config?.rankBonus2),
+      rankBonus3: Number(config?.rankBonus3),
+      redPenalty: Number(config?.redPenalty),
+      blackPenalty: Number(config?.blackPenalty),
+      penalizeClueGiverForWrongGuesses: Boolean(config?.penalizeClueGiverForWrongGuesses),
+      simultaneousClue: Boolean(config?.simultaneousClue),
+      greenCards: Number(config?.greenCards),
+      redCards: Number(config?.redCards),
+      blackCards: Number(config?.blackCards)
+    });
+    return JSON.stringify(normalizeGameConfig(draftSettings.gameConfig))
+      !== JSON.stringify(normalizeGameConfig(lobby.settings.gameConfig));
+  }, [draftSettings?.gameConfig, lobby?.settings?.gameConfig]);
+
+  const settingsDirty = generalSettingsDirty || gameSettingsDirty;
 
   useEffect(() => {
     if (!lobbyId) {
@@ -192,49 +219,91 @@ export default function LobbyPage() {
     }));
   }
 
-  function saveSettings() {
-    const socket = getSocket();
-    setMessage("");
-    setError("");
+  function buildGameConfigPayload() {
+    return {
+      wordLanguage: String(draftSettings.gameConfig?.wordLanguage || "en"),
+      cycles: Number(draftSettings.gameConfig?.cycles),
+      cluePhaseSeconds: Number(draftSettings.gameConfig?.cluePhaseSeconds),
+      guessPhaseSeconds: Number(draftSettings.gameConfig?.guessPhaseSeconds),
+      betweenRoundsSeconds: Number(draftSettings.gameConfig?.betweenRoundsSeconds),
+      clueCardValue: Number(draftSettings.gameConfig?.clueCardValue),
+      guesserCardPool: Number(draftSettings.gameConfig?.guesserCardPool),
+      rankBonus1: Number(draftSettings.gameConfig?.rankBonus1),
+      rankBonus2: Number(draftSettings.gameConfig?.rankBonus2),
+      rankBonus3: Number(draftSettings.gameConfig?.rankBonus3),
+      redPenalty: Number(draftSettings.gameConfig?.redPenalty),
+      blackPenalty: Number(draftSettings.gameConfig?.blackPenalty),
+      penalizeClueGiverForWrongGuesses: Boolean(
+        draftSettings.gameConfig?.penalizeClueGiverForWrongGuesses
+      ),
+      simultaneousClue: Boolean(draftSettings.gameConfig?.simultaneousClue),
+      greenCards: Number(draftSettings.gameConfig?.greenCards),
+      redCards: Number(draftSettings.gameConfig?.redCards),
+      blackCards: Number(draftSettings.gameConfig?.blackCards)
+    };
+  }
 
+  function saveGeneralSettings({ silent = false } = {}) {
+    const socket = getSocket();
+    if (!silent) {
+      setMessage("");
+      setError("");
+    }
+
+    return new Promise((resolve) => {
+      socket.emit(
+        "update-lobby-general",
+        {
+          lobbyId,
+          playerId,
+          general: {
+            name: String(draftLobbyName || "").trim(),
+            visibility: draftSettings.visibility
+          }
+        },
+        (ack) => {
+          if (!ack?.ok) {
+            setError(ack?.error || "Could not save lobby settings.");
+            resolve(false);
+            return;
+          }
+          if (!silent) {
+            setMessage(t("generalSettingsSaved"));
+          }
+          resolve(true);
+        }
+      );
+    });
+  }
+
+  function saveSettings({ silent = false } = {}) {
+    const socket = getSocket();
+    if (!silent) {
+      setMessage("");
+      setError("");
+    }
+
+    return new Promise((resolve) => {
     socket.emit(
-      "update-settings",
+      "update-game-settings",
       {
         lobbyId,
         playerId,
-        settings: {
-          visibility: draftSettings.visibility,
-          gameConfig: {
-            wordLanguage: String(draftSettings.gameConfig?.wordLanguage || "en"),
-            cycles: Number(draftSettings.gameConfig?.cycles),
-            cluePhaseSeconds: Number(draftSettings.gameConfig?.cluePhaseSeconds),
-            guessPhaseSeconds: Number(draftSettings.gameConfig?.guessPhaseSeconds),
-            betweenRoundsSeconds: Number(draftSettings.gameConfig?.betweenRoundsSeconds),
-            clueCardValue: Number(draftSettings.gameConfig?.clueCardValue),
-            guesserCardPool: Number(draftSettings.gameConfig?.guesserCardPool),
-            rankBonus1: Number(draftSettings.gameConfig?.rankBonus1),
-            rankBonus2: Number(draftSettings.gameConfig?.rankBonus2),
-            rankBonus3: Number(draftSettings.gameConfig?.rankBonus3),
-            redPenalty: Number(draftSettings.gameConfig?.redPenalty),
-            blackPenalty: Number(draftSettings.gameConfig?.blackPenalty),
-            penalizeClueGiverForWrongGuesses: Boolean(
-              draftSettings.gameConfig?.penalizeClueGiverForWrongGuesses
-            ),
-            simultaneousClue: Boolean(draftSettings.gameConfig?.simultaneousClue),
-            greenCards: Number(draftSettings.gameConfig?.greenCards),
-            redCards: Number(draftSettings.gameConfig?.redCards),
-            blackCards: Number(draftSettings.gameConfig?.blackCards)
-          }
-        }
+        gameConfig: buildGameConfigPayload()
       },
       (ack) => {
         if (!ack?.ok) {
           setError(ack?.error || "Could not save settings.");
+          resolve(false);
           return;
         }
-        setMessage("Settings saved.");
+        if (!silent) {
+          setMessage(t("gameSettingsSaved"));
+        }
+        resolve(true);
       }
     );
+    });
   }
 
   function kickPlayer(targetPlayerId) {
@@ -292,7 +361,7 @@ export default function LobbyPage() {
 
   async function copyInviteLink() {
     if (!lobby?.id) return;
-    const link = `${window.location.origin}/${import.meta.env.VITE_GAME_NAME || "wordmine"}/?join=${lobby.id}&joinSource=invite`;
+    const link = `${window.location.origin}/${import.meta.env.VITE_GAME_NAME || "wordmine"}/lobbies?join=${lobby.id}&joinSource=invite`;
     try {
       await navigator.clipboard.writeText(link);
       setCopiedInvite(true);
@@ -323,7 +392,7 @@ export default function LobbyPage() {
     );
   }
 
-  const inviteLink = `${window.location.origin}/${import.meta.env.VITE_GAME_NAME || "wordmine"}/?join=${lobby.id}&joinSource=invite`;
+  const inviteLink = `${window.location.origin}/${import.meta.env.VITE_GAME_NAME || "wordmine"}/lobbies?join=${lobby.id}&joinSource=invite`;
 
   return (
     <main className="page">
@@ -331,24 +400,35 @@ export default function LobbyPage() {
         <div className="section-head">
           <div>
             {isHost ? (
-              <div className="lobby-name-edit-row">
-                <input
-                  className="lobby-name-input"
-                  value={draftLobbyName}
-                  onChange={(e) => setDraftLobbyName(e.target.value)}
-                  onBlur={() => {
-                    const trimmed = draftLobbyName.trim();
-                    if (trimmed.length >= 2 && trimmed !== (lobby.name || "")) {
-                      getSocket().emit("update-lobby-name", { lobbyId, playerId, name: trimmed }, (ack) => {
-                        if (!ack?.ok) setError(ack?.error || "Could not rename lobby.");
-                      });
-                    }
-                  }}
-                  onKeyDown={(e) => { if (e.key === "Enter") e.target.blur(); }}
-                  placeholder={t("enterLobbyName")}
-                  minLength={2}
-                  maxLength={30}
-                />
+              <div className="lobby-general-settings-row">
+                <div className="lobby-name-edit-row">
+                  <input
+                    className="lobby-name-input"
+                    value={draftLobbyName}
+                    onChange={(e) => setDraftLobbyName(e.target.value)}
+                    placeholder={t("enterLobbyName")}
+                    minLength={2}
+                    maxLength={30}
+                  />
+                </div>
+                <div className="visibility-slider-wrap">
+                  <span className="visibility-slider-label">{t("lobbyVisibility")}</span>
+                  <button
+                    type="button"
+                    className={`visibility-slider ${draftSettings.visibility === "private" ? "is-private" : "is-public"}`}
+                    onClick={() => updateSettingField("visibility", draftSettings.visibility === "public" ? "private" : "public")}
+                    aria-label={`${t("lobbyVisibility")}: ${draftSettings.visibility === "public" ? t("public") : t("private")}`}
+                  >
+                    <span className="visibility-slider-text public">{t("public")}</span>
+                    <span className="visibility-slider-thumb" />
+                    <span className="visibility-slider-text private">{t("private")}</span>
+                  </button>
+                </div>
+                {generalSettingsDirty && (
+                  <button className="ghost lobby-save-btn" type="button" onClick={() => saveGeneralSettings()}>
+                    {t("saveChanges")}
+                  </button>
+                )}
               </div>
             ) : (
               <h1>{lobby.name || `${t("lobby")} ${lobby.id}`}</h1>
@@ -357,7 +437,7 @@ export default function LobbyPage() {
               {t("status")}: <strong style={{ color: "var(--text)" }}>{lobby.status}</strong>
             </p>
           </div>
-          <button className="ghost" onClick={leaveLobbyAndGoHome}>{t("exit")}</button>
+          <button className="ghost lobby-exit-btn" onClick={leaveLobbyAndGoHome}>{t("exit")}</button>
         </div>
 
         {error && <p className="error">{error}</p>}
@@ -365,22 +445,6 @@ export default function LobbyPage() {
 
         <div className="section-head" style={{ marginBottom: "14px" }}>
           <h2 style={{ marginBottom: 0 }}>{t("players")} ({lobby.players.length})</h2>
-          {isHost && (
-            <div style={{ display: "grid", justifyItems: "end", gap: "6px" }}>
-              <button
-                type="button"
-                className="ghost"
-                onClick={addAiAgent}
-                disabled={disableAddAiButton}
-                title={addAiDisabledReason || undefined}
-              >
-                {isAddingAiAgent ? t("addingAiAgent") : t("addAiAgent")}
-              </button>
-              {addAiDisabledReason && (
-                <span style={{ fontSize: "0.78rem", color: "var(--text-muted)" }}>{addAiDisabledReason}</span>
-              )}
-            </div>
-          )}
         </div>
         <ul className="player-list">
           {lobby.players.map((player) => (
@@ -413,6 +477,22 @@ export default function LobbyPage() {
               );
             })()
           ))}
+          {isHost && !aiLimitReached && (
+            <li className="agent-badge add-ai-slot">
+              <button
+                type="button"
+                className="add-ai-slot-btn"
+                onClick={addAiAgent}
+                disabled={disableAddAiButton}
+                title={addAiDisabledReason || undefined}
+              >
+                <div className="agent-avatar add-ai-avatar">+</div>
+                <div className="agent-info">
+                  <span className="agent-name">{isAddingAiAgent ? t("addingAiAgent") : t("addAiAgent")}</span>
+                </div>
+              </button>
+            </li>
+          )}
         </ul>
 
         <div style={{ marginTop: "20px" }}>
@@ -458,21 +538,10 @@ export default function LobbyPage() {
           </div>
         </div>
 
-        {/* Lobby visibility */}
+        {/* Core game settings */}
         <div className="settings-section">
-          <p className="settings-section-title">Lobby</p>
+          <p className="settings-section-title">{t("gameConfig")}</p>
           <div className="settings-grid">
-            <label>
-              {t("lobbyVisibility")}
-              <select
-                value={draftSettings.visibility}
-                onChange={(e) => updateSettingField("visibility", e.target.value)}
-                disabled={!isHost}
-              >
-                <option value="public">{t("public")}</option>
-                <option value="private">{t("private")}</option>
-              </select>
-            </label>
             <label>
               {t("wordLanguage")}
               <select
@@ -666,7 +735,7 @@ export default function LobbyPage() {
         </div>
 
         <div className="button-row">
-          {isHost && (
+          {isHost && gameSettingsDirty && (
             <button className="ghost" onClick={saveSettings}>
               {t("saveSettings")}
             </button>
@@ -680,7 +749,7 @@ export default function LobbyPage() {
           </button>
         </div>
 
-        {isHost && settingsDirty && (
+        {isHost && (generalSettingsDirty || gameSettingsDirty) && (
           <p className="error" style={{ marginTop: "10px" }}>{t("unsavedSettingsDetected")}</p>
         )}
       </section>
@@ -696,42 +765,21 @@ export default function LobbyPage() {
                 onClick={() => {
                   setShowUnsavedStartWarning(false);
                   const socket = getSocket();
-                  socket.emit(
-                    "update-settings",
-                    {
-                      lobbyId,
-                      playerId,
-                      settings: {
-                        visibility: draftSettings.visibility,
-                        gameConfig: {
-                          wordLanguage: String(draftSettings.gameConfig?.wordLanguage || "en"),
-                          cycles: Number(draftSettings.gameConfig?.cycles),
-                          cluePhaseSeconds: Number(draftSettings.gameConfig?.cluePhaseSeconds),
-                          guessPhaseSeconds: Number(draftSettings.gameConfig?.guessPhaseSeconds),
-                          betweenRoundsSeconds: Number(draftSettings.gameConfig?.betweenRoundsSeconds),
-                          clueCardValue: Number(draftSettings.gameConfig?.clueCardValue),
-                          guesserCardPool: Number(draftSettings.gameConfig?.guesserCardPool),
-                          rankBonus1: Number(draftSettings.gameConfig?.rankBonus1),
-                          rankBonus2: Number(draftSettings.gameConfig?.rankBonus2),
-                          rankBonus3: Number(draftSettings.gameConfig?.rankBonus3),
-                          redPenalty: Number(draftSettings.gameConfig?.redPenalty),
-                          blackPenalty: Number(draftSettings.gameConfig?.blackPenalty),
-                          penalizeClueGiverForWrongGuesses: Boolean(draftSettings.gameConfig?.penalizeClueGiverForWrongGuesses),
-                          simultaneousClue: Boolean(draftSettings.gameConfig?.simultaneousClue),
-                          greenCards: Number(draftSettings.gameConfig?.greenCards),
-                          redCards: Number(draftSettings.gameConfig?.redCards),
-                          blackCards: Number(draftSettings.gameConfig?.blackCards)
-                        }
-                      }
-                    },
-                    (ack) => {
-                      if (!ack?.ok) {
-                        setError(ack?.error || "Could not save settings.");
-                        return;
-                      }
-                      startGameNow();
+                  (async () => {
+                    const generalOk = generalSettingsDirty
+                      ? await saveGeneralSettings({ silent: true })
+                      : true;
+                    if (!generalOk) {
+                      return;
                     }
-                  );
+                    const gameOk = gameSettingsDirty
+                      ? await saveSettings({ silent: true })
+                      : true;
+                    if (!gameOk) {
+                      return;
+                    }
+                    startGameNow();
+                  })();
                 }}
               >
                 {t("saveFirstAndStart")}

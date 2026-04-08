@@ -1,4 +1,6 @@
 const crypto = require("crypto");
+const fs = require("fs");
+const path = require("path");
 const { getDefaultGameConfig } = require("./gameEngine");
 
 const lobbies = new Map();
@@ -18,6 +20,44 @@ const AI_NAME_BASES = ["Cipher", "Nova", "Atlas", "Echo"];
 const MAX_LOBBY_PLAYERS = PLAYER_COLORS.length;
 const MAX_AI_AGENTS_PER_LOBBY = 1;
 const AI_AGENT_ADD_PASSWORD_SHA512 = "ab33fe5f2945bbd61915f931177f39811f775d11675b29f4f078af0890fa180f3b849ec6cf0061ad1aa3f08f43f12b5fb279d6886a12944fb3c9e7e25b83f556";
+
+function loadWordsFromFile(fileName) {
+  const absolute = path.resolve(__dirname, "../../", fileName);
+  const raw = fs.readFileSync(absolute, "utf8");
+  return raw
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+const LOBBY_WORDS_BY_LANGUAGE = {
+  en: loadWordsFromFile("words-en.txt"),
+  de: loadWordsFromFile("words-de.txt")
+};
+
+function pickRandomLobbyWord(language = "en") {
+  const pool = LOBBY_WORDS_BY_LANGUAGE[language] || LOBBY_WORDS_BY_LANGUAGE.en;
+  if (!pool || pool.length === 0) return "Briefing";
+  return pool[Math.floor(Math.random() * pool.length)];
+}
+
+function buildAutoLobbyName(language = "en") {
+  const prefix = "Mission";
+  const maxWordLength = 30 - (prefix.length + 1);
+  const safeWordLength = Math.max(1, maxWordLength);
+
+  // Retry a few times to pick a naturally fitting word before truncating.
+  for (let i = 0; i < 8; i += 1) {
+    const word = String(pickRandomLobbyWord(language) || "").trim();
+    if (!word) continue;
+    if (word.length <= safeWordLength) {
+      return `${prefix} ${word}`;
+    }
+  }
+
+  const fallbackWord = String(pickRandomLobbyWord(language) || "Briefing").trim();
+  return `${prefix} ${fallbackWord.slice(0, safeWordLength)}`;
+}
 
 function hashSha512(value) {
   return crypto.createHash("sha512").update(String(value || ""), "utf8").digest("hex");
@@ -115,6 +155,23 @@ function getDefaultLobbySettings(visibility) {
   };
 }
 
+function mergeLobbySettings(visibility, overrideSettings = null) {
+  const defaults = getDefaultLobbySettings(visibility);
+  if (!overrideSettings || typeof overrideSettings !== "object") {
+    return defaults;
+  }
+
+  return {
+    ...defaults,
+    ...overrideSettings,
+    visibility,
+    gameConfig: {
+      ...defaults.gameConfig,
+      ...(overrideSettings.gameConfig || {})
+    }
+  };
+}
+
 function validateLobbyName(name) {
   const trimmed = String(name || "").trim();
   if (!trimmed) {
@@ -134,8 +191,12 @@ function createLobby(hostName, visibility = "public", overrideSettings = null, l
   if (!["public", "private"].includes(visibility)) {
     return { error: "visibility must be public or private." };
   }
-  if (lobbyName !== null) {
-    const lobbyNameError = validateLobbyName(lobbyName);
+  const effectiveWordLanguage = String(overrideSettings?.gameConfig?.wordLanguage || "en").toLowerCase();
+  const normalizedWordLanguage = ["en", "de"].includes(effectiveWordLanguage) ? effectiveWordLanguage : "en";
+  const resolvedLobbyName = lobbyName ? String(lobbyName).trim() : buildAutoLobbyName(normalizedWordLanguage);
+
+  if (resolvedLobbyName !== null) {
+    const lobbyNameError = validateLobbyName(resolvedLobbyName);
     if (lobbyNameError) {
       return { error: lobbyNameError };
     }
@@ -147,14 +208,12 @@ function createLobby(hostName, visibility = "public", overrideSettings = null, l
 
   const lobby = {
     id: lobbyId,
-    name: lobbyName ? String(lobbyName).trim() : null,
+    name: resolvedLobbyName,
     hostId,
     status: "waiting",
     createdAt,
     updatedAt: createdAt,
-    settings: overrideSettings
-      ? { ...overrideSettings, visibility }
-      : getDefaultLobbySettings(visibility),
+    settings: mergeLobbySettings(visibility, overrideSettings),
     players: [
       {
         id: hostId,
@@ -321,6 +380,35 @@ function markPlayerConnected(lobbyId, playerId, connected) {
 }
 
 function updateLobbySettings(lobbyId, playerId, patch) {
+  const hasGeneralPatch = Object.prototype.hasOwnProperty.call(patch || {}, "visibility")
+    || Object.prototype.hasOwnProperty.call(patch || {}, "name");
+  const hasGamePatch = Object.prototype.hasOwnProperty.call(patch || {}, "gameConfig");
+
+  if (!hasGeneralPatch && !hasGamePatch) {
+    return { error: "No settings provided." };
+  }
+
+  if (hasGeneralPatch) {
+    const generalResult = updateLobbyGeneralSettings(lobbyId, playerId, {
+      visibility: patch?.visibility,
+      name: patch?.name
+    });
+    if (generalResult.error) {
+      return generalResult;
+    }
+  }
+
+  if (hasGamePatch) {
+    const gameResult = updateLobbyGameSettings(lobbyId, playerId, patch?.gameConfig || {});
+    if (gameResult.error) {
+      return gameResult;
+    }
+  }
+
+  return { lobby: getSerializedLobby(lobbyId) };
+}
+
+function updateLobbyGeneralSettings(lobbyId, playerId, patch) {
   const lobby = getLobby(lobbyId);
   if (!lobby) {
     return { error: "Lobby not found." };
@@ -332,15 +420,43 @@ function updateLobbySettings(lobbyId, playerId, patch) {
     return { error: "Lobby already started." };
   }
 
-  const nextVisibility = patch.visibility ?? lobby.settings.visibility;
-  const nextConfig = {
-    ...(lobby.settings.gameConfig || getDefaultGameConfig()),
-    ...(patch.gameConfig || {})
-  };
+  const nextVisibility = patch?.visibility ?? lobby.settings.visibility;
+  const hasNamePatch = Object.prototype.hasOwnProperty.call(patch || {}, "name");
 
   if (!["public", "private"].includes(nextVisibility)) {
     return { error: "visibility must be public or private." };
   }
+
+  if (hasNamePatch) {
+    const nameError = validateLobbyName(patch?.name);
+    if (nameError) {
+      return { error: nameError };
+    }
+    lobby.name = String(patch?.name || "").trim();
+  }
+
+  lobby.settings.visibility = nextVisibility;
+  lobby.updatedAt = nowIso();
+
+  return { lobby: serializeLobby(lobby) };
+}
+
+function updateLobbyGameSettings(lobbyId, playerId, gameConfigPatch) {
+  const lobby = getLobby(lobbyId);
+  if (!lobby) {
+    return { error: "Lobby not found." };
+  }
+  if (lobby.hostId !== playerId) {
+    return { error: "Only the host can update settings." };
+  }
+  if (lobby.status !== "waiting") {
+    return { error: "Lobby already started." };
+  }
+
+  const nextConfig = {
+    ...(lobby.settings.gameConfig || getDefaultGameConfig()),
+    ...(gameConfigPatch || {})
+  };
 
   if (!Number.isInteger(Number(nextConfig.cycles)) || Number(nextConfig.cycles) < 1 || Number(nextConfig.cycles) > 30) {
     return { error: "cycles must be 1-30." };
@@ -400,7 +516,6 @@ function updateLobbySettings(lobbyId, playerId, patch) {
   nextConfig.penalizeClueGiverForWrongGuesses = Boolean(nextConfig.penalizeClueGiverForWrongGuesses);
   nextConfig.simultaneousClue = Boolean(nextConfig.simultaneousClue);
 
-  lobby.settings.visibility = nextVisibility;
   lobby.settings.gameConfig = nextConfig;
   lobby.updatedAt = nowIso();
 
@@ -544,5 +659,7 @@ module.exports = {
   removePlayerFromStartedLobby,
   startGame,
   updateLobbyName,
-  updateLobbySettings
+  updateLobbySettings,
+  updateLobbyGeneralSettings,
+  updateLobbyGameSettings
 };

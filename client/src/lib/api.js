@@ -24,10 +24,10 @@ export function listGames() {
   return request("/api/games");
 }
 
-export function createLobby(name, visibility, lobbyName = null, browserId = "") {
+export function createLobby(name, visibility, lobbyName = null, browserId = "", wordLanguage = "en") {
   return request("/api/lobbies", {
     method: "POST",
-    body: JSON.stringify({ name, visibility, lobbyName, browserId })
+    body: JSON.stringify({ name, visibility, lobbyName, browserId, wordLanguage })
   });
 }
 

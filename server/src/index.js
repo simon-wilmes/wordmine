@@ -17,7 +17,9 @@ const {
   removePlayerFromStartedLobby,
   startGame,
   updateLobbyName,
-  updateLobbySettings
+  updateLobbySettings,
+  updateLobbyGeneralSettings,
+  updateLobbyGameSettings
 } = require("./store");
 const {
   advanceRound,
@@ -181,10 +183,17 @@ gameRouter.get("/api/games/history/:id", async (req, res) => {
 });
 
 gameRouter.post("/api/lobbies", (req, res) => {
+  const requestedWordLanguage = String(req.body?.wordLanguage || "").toLowerCase();
+  const wordLanguage = ["en", "de"].includes(requestedWordLanguage) ? requestedWordLanguage : "en";
+
   const result = createLobby(
     req.body?.name,
     req.body?.visibility || "public",
-    null,
+    {
+      gameConfig: {
+        wordLanguage
+      }
+    },
     req.body?.lobbyName || null,
     null,
     req.body?.browserId || ""
@@ -1037,6 +1046,38 @@ io.on("connection", (socket) => {
     }
 
     logDebug("update-settings success", { socketId: socket.id, lobbyId, playerId, settings: payload?.settings || {} });
+    io.to(lobbyId).emit("lobby-updated", result.lobby);
+    if (ack) ack({ ok: true, lobby: result.lobby });
+  });
+
+  socket.on("update-lobby-general", (payload, ack) => {
+    const lobbyId = payload?.lobbyId || socket.data.lobbyId;
+    const playerId = payload?.playerId || socket.data.playerId;
+    const result = updateLobbyGeneralSettings(lobbyId, playerId, payload?.general || {});
+
+    if (result.error) {
+      logDebug("update-lobby-general failed", { socketId: socket.id, lobbyId, playerId, error: result.error });
+      if (ack) ack({ ok: false, error: result.error });
+      return;
+    }
+
+    logDebug("update-lobby-general success", { socketId: socket.id, lobbyId, playerId, general: payload?.general || {} });
+    io.to(lobbyId).emit("lobby-updated", result.lobby);
+    if (ack) ack({ ok: true, lobby: result.lobby });
+  });
+
+  socket.on("update-game-settings", (payload, ack) => {
+    const lobbyId = payload?.lobbyId || socket.data.lobbyId;
+    const playerId = payload?.playerId || socket.data.playerId;
+    const result = updateLobbyGameSettings(lobbyId, playerId, payload?.gameConfig || {});
+
+    if (result.error) {
+      logDebug("update-game-settings failed", { socketId: socket.id, lobbyId, playerId, error: result.error });
+      if (ack) ack({ ok: false, error: result.error });
+      return;
+    }
+
+    logDebug("update-game-settings success", { socketId: socket.id, lobbyId, playerId, gameConfig: payload?.gameConfig || {} });
     io.to(lobbyId).emit("lobby-updated", result.lobby);
     if (ack) ack({ ok: true, lobby: result.lobby });
   });

@@ -109,8 +109,8 @@ function appendChatMessage(game, entry) {
 function getDefaultGameConfig() {
   return {
     wordLanguage: "en",
-    cycles: 1,
-    simultaneousClue: false,
+    cycles: 3,
+    simultaneousClue: true,
     cluePhaseSeconds: 60,
     guessPhaseSeconds: 60,
     betweenRoundsSeconds: 15,

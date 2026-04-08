@@ -1,10 +1,11 @@
 # Codename Competition aka Wordmine
 
-Realtime multiplayer Codenames-inspired party game with private/public lobbies, invite links, host-configurable rules, per-round scoring, in-game chat, and bilingual support (English/German).m
+Realtime multiplayer Codenames-inspired party game with private/public lobbies, invite links, host-configurable rules, per-round scoring, in-game chat, and bilingual support (English/German).
 
 ## What This Project Does
 
 - Create and join lobbies (public or private) with invite links
+- Route split: new homepage at `/${GAME_NAME}/`, lobby browser/history view at `/${GAME_NAME}/lobbies`
 - Start realtime matches over Socket.io with configurable rules
 - Two game modes: **standard** (rotating clue giver) and **simultaneous clue** (all players give clues, then guess in sequence)
 - Track guesses, penalties, round timing, and cumulative scores
@@ -61,7 +62,7 @@ The game name prefix is defined in `.env` at the project root:
 GAME_NAME=wordmine
 ```
 
-All URLs are served under `/${GAME_NAME}/` (e.g., `/wordmine/`, `/wordmine/api/...`, `/wordmine/lobby/:id`). Both the production Node server and Vite dev/preview server automatically redirect `/${GAME_NAME}` to `/${GAME_NAME}/` (for example `/wordmine` -> `/wordmine/`) so the app always runs from its canonical base URL. To rename the game, change this single value and restart. No domain is hardcoded — the app works on `localhost`, `games.wilmes.dev`, or any other host.
+All URLs are served under `/${GAME_NAME}/` (e.g., `/wordmine/`, `/wordmine/lobbies`, `/wordmine/api/...`, `/wordmine/lobby/:id`). Both the production Node server and Vite dev/preview server automatically redirect `/${GAME_NAME}` to `/${GAME_NAME}/` (for example `/wordmine` -> `/wordmine/`) so the app always runs from its canonical base URL. To rename the game, change this single value and restart. No domain is hardcoded — the app works on `localhost`, `games.wilmes.dev`, or any other host.
 
 Cloudflare does not need a special rule for this specific slash redirect when traffic reaches this Node server; the app handles it itself. If you terminate traffic somewhere else before Node, add the equivalent redirect at that layer.
 
@@ -230,7 +231,7 @@ The same replay overview is also available on the final game overview screen (`G
 
 ## Lobby & Session Flow
 
-1. **Create lobby** (`POST /api/lobbies`) — body includes `name` (player, `2-25` chars), `visibility`, `lobbyName`, and `browserId`; returns `lobbyId` + `playerId` (host)
+1. **Create lobby** (`POST /api/lobbies`) — body includes `name` (player, `2-25` chars), `visibility`, `lobbyName`, `browserId`, and optional `wordLanguage`; if `lobbyName` is omitted, server auto-generates `Mission <random-word>` using the selected word language; returns `lobbyId` + `playerId` (host)
 2. **Join lobby** (`POST /api/lobbies/:id/join`) — body includes `name` (`2-25` chars), `viaInvite`, and `browserId`; returns `playerId` for the new player (lobby hard limit: 8 players)
 3. **Connect socket** (`join-lobby` event) — joins the Socket.io room, marks player connected
 4. **Start game** (`start-game` event) — host only, requires 2+ players
@@ -255,7 +256,7 @@ A persistent browser-scoped `browserId` is also stored in `localStorage` and use
 | `GET` | `/api/games` | List public in-progress games |
 | `GET` | `/api/games/history?browserId=...` | List finished games for this browser |
 | `GET` | `/api/games/history/:id?browserId=...` | Get archived finished game details |
-| `POST` | `/api/lobbies` | Create lobby (body: `name`, `visibility`, `lobbyName`, `browserId`) |
+| `POST` | `/api/lobbies` | Create lobby (body: `name`, `visibility`, `lobbyName`, `browserId`, optional `wordLanguage`; if `lobbyName` omitted, name defaults to `Mission <random-word>`) |
 | `GET` | `/api/lobbies/:id` | Get lobby + game status |
 | `POST` | `/api/lobbies/:id/join` | Join lobby (body: `name`, `viaInvite`, `browserId`) |
 
@@ -300,7 +301,7 @@ codename-competition/
   words-de.txt              # German word list
   client/
     src/
-      App.jsx               # React Router setup (/, /lobby/:id, /game/:id)
+      App.jsx               # React Router setup (/, /landing, /lobbies, /lobby/:id, /game/:id)
       styles.css             # All component styles + responsive breakpoints
       styles/tokens.css      # CSS custom properties (colors, spacing, fonts)
       lib/
@@ -313,7 +314,8 @@ codename-competition/
         common/LanguageToggle.jsx   # UI language switcher
         game/StatsChips.jsx         # Colored stat badges (correct/neutral/red/black)
       pages/
-        LandingPage.jsx     # Create/join lobbies, see active games, rejoin yours
+        NewLandingPage.jsx  # New homepage: name + private lobby creation + browse button
+        LandingPage.jsx     # Legacy lobby browser/history page (mounted at /lobbies)
         LobbyPage.jsx       # Lobby waiting room, settings, player list, invite link
         GamePage.jsx        # Active game board + chat + game-over podium
   server/
