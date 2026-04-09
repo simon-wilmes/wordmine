@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import spyImg from "../assets/spy/spy-silhouette.svg";
+import ClueyWordmark from "../components/common/ClueyWordmark";
 import { createLobby } from "../lib/api";
 import { useI18n } from "../lib/i18n";
 import { getOrCreateBrowserId, setStoredPlayerId } from "../lib/session";
@@ -40,7 +41,9 @@ export default function NewLandingPage() {
 
       <main className="cluey-landing-main">
         <section className="cluey-start-card card">
-          <h1 className="cluey-logo">Cluey.io</h1>
+          <h1 className="cluey-logo">
+            <ClueyWordmark showDotIo />
+          </h1>
           <p className="cluey-subtitle">{t("newLandingSubtitle")}</p>
 
           <form className="cluey-start-form" onSubmit={handleCreateLobby}>

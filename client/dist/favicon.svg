@@ -1,23 +1,25 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Cluey favicon board grid">
   <defs>
     <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
       <stop offset="0%" stop-color="#f9dc12"/>
-      <stop offset="45%" stop-color="#ed692b"/>
+      <stop offset="28%" stop-color="#ed692b"/>
+      <stop offset="58%" stop-color="#a41f4a"/>
+      <stop offset="80%" stop-color="#721446"/>
       <stop offset="100%" stop-color="#8d173a"/>
     </linearGradient>
-    <mask id="cutout">
-      <rect width="32" height="32" fill="white"/>
-      <!-- Ring -->
-      <circle cx="16" cy="16" r="10.8" fill="black"/>
-      <circle cx="16" cy="16" r="7.8" fill="white"/>
-      <!-- Center dot -->
-      <circle cx="16" cy="16" r="3.5" fill="black"/>
-      <!-- Crosshair lines -->
-      <line x1="16" y1="2.5" x2="16" y2="6" stroke="black" stroke-width="2.8" stroke-linecap="round"/>
-      <line x1="16" y1="26" x2="16" y2="29.5" stroke="black" stroke-width="2.8" stroke-linecap="round"/>
-      <line x1="2.5" y1="16" x2="6" y2="16" stroke="black" stroke-width="2.8" stroke-linecap="round"/>
-      <line x1="26" y1="16" x2="29.5" y2="16" stroke="black" stroke-width="2.8" stroke-linecap="round"/>
-    </mask>
   </defs>
-  <rect width="32" height="32" rx="7" fill="url(#bg)" mask="url(#cutout)"/>
+
+  <g transform="translate(4 4)">
+    <rect x="0" y="0" width="16" height="16" rx="3" fill="#1a6e4e"/>
+    <rect x="18" y="0" width="16" height="16" rx="3" fill="#8d173a"/>
+    <rect x="36" y="0" width="16" height="16" rx="3" fill="#1a6e4e"/>
+
+    <rect x="0" y="18" width="16" height="16" rx="3" fill="#8d173a"/>
+    <rect x="18" y="18" width="16" height="16" rx="3" fill="#0d0508"/>
+    <rect x="36" y="18" width="16" height="16" rx="3" fill="#8d173a"/>
+
+    <rect x="0" y="36" width="16" height="16" rx="3" fill="#1a6e4e"/>
+    <rect x="18" y="36" width="16" height="16" rx="3" fill="#8d173a"/>
+    <rect x="36" y="36" width="16" height="16" rx="3" fill="#1a6e4e"/>
+  </g>
 </svg>

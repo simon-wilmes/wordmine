@@ -68,9 +68,12 @@ export default function RulesModal({ isOpen, onClose }) {
     t("rulesCoreFlowBullet6")
   ], [t]);
 
-  const advancedItems = useMemo(() => [
+  const advancedModeItems = useMemo(() => [
     t("rulesAdvancedBullet1"),
-    t("rulesAdvancedBullet2"),
+    t("rulesAdvancedBullet2")
+  ], [t]);
+
+  const advancedScoringItems = useMemo(() => [
     t("rulesAdvancedBullet3"),
     t("rulesAdvancedBullet4"),
     t("rulesAdvancedBullet5")
@@ -142,8 +145,16 @@ export default function RulesModal({ isOpen, onClose }) {
           {activeTab === "advanced" && (
             <section className="rules-section">
               <h3>{t("rulesAdvancedTitle")}</h3>
-              <p>{t("rulesAdvancedIntro")}</p>
-              <RulesList items={advancedItems} />
+              <div className="rules-subsection">
+                <h4>{t("rulesModesTitle")}</h4>
+                <RulesList items={advancedModeItems} />
+              </div>
+
+              <div className="rules-subsection">
+                <h4>{t("rulesScoringTitle")}</h4>
+                <p>{t("rulesAdvancedIntro")}</p>
+                <RulesList items={advancedScoringItems} />
+              </div>
 
               <div className="rules-example card">
                 <h4>{t("rulesScoringExampleTitle")}</h4>

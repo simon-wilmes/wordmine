@@ -17,9 +17,9 @@ Realtime multiplayer Codenames-inspired party game with private/public lobbies, 
 - Round-end board reveal + end-game podium with detailed stats
 - Past-round replay timeline with per-cluegiver snapshots (available during live play and on final overview)
 - Rematch flow: host creates a new lobby with same settings and name, other players see a popup and can join with one click
-- Spectator mode for watching live games
+- Spectator mode for watching live public games
 - Reconnect on page refresh (player identity stored in localStorage per lobby)
-- Persistent finished-game history per browser, shown on the landing page
+- Persistent finished-game history per browser (available via history API/archive retrieval)
 - Bilingual: board word language per lobby (`en`/`de`) + UI language toggle (`en`/`de`)
 - Global `Rules` popup next to the language control (available on all app routes) with bilingual tabs for quick start, core rules, scoring/modes, card-type legend, and suggested visual references
 - Optional AI clue agent (Claude Code CLI) that can be added by host in lobby (max 1 AI per game)
@@ -135,6 +135,8 @@ Flow per round:
   - Returns ordered words to click by likelihood
   - Can stop early by returning fewer guesses
   - On non-target green clicks, receives feedback and can re-plan remaining guesses
+  - AI guess prompts are fairness-constrained: they only include user-visible context (clue, clue count, board words, already guessed words, and click outcomes)
+  - AI guessers do not receive hidden target-card identities or any private clue-giver selections
   - Parsing/planning failures are retried up to 3 times per AI guesser per round
   - After retry limit, AI guesser stops for that round
 
@@ -170,7 +172,11 @@ For each AI clue attempt, server logs include:
 - Prompt dispatch + waiting logs before CLI execution (`[llm-clue] claude prompt dispatch*`, `[llm-clue] claude awaiting response`) for every Claude call
 - Raw Claude output (verbatim)
 - Parsed JSON output and validation status
+- Explicit operator warnings when Claude fails before a response (`runtime_exceeded` for CLI timeout, `command_failed` for other command failures)
+- Explicit `retries_exceeded` warnings when max AI retries are reached
 - Retry/failure reason and final status (`submitted` or `skipped_after_retries`)
+
+In addition to server logs, player-visible system messages are posted to the in-game `Terminal` chat when AI requests time out (`runtime_exceeded`) or when AI retries are exhausted (`retries_exceeded`).
 
 Note: logs can contain live board words and clues.
 
@@ -247,7 +253,7 @@ If explicit quits reduce active players below 2, the game ends immediately as in
 
 Player identity is stored in `localStorage` as a map of `lobbyId -> playerId`, allowing reconnect on page refresh and tracking "Your Games" on the landing page.
 
-A persistent browser-scoped `browserId` is also stored in `localStorage` and used to load finished games from server storage in the `Past Games` section.
+A persistent browser-scoped `browserId` is also stored in `localStorage` and used to retrieve finished games from server history endpoints.
 
 ## API & Realtime Contracts
 
@@ -269,7 +275,7 @@ A persistent browser-scoped `browserId` is also stored in `localStorage` and use
 
 | Event | Description |
 |-------|-------------|
-| `join-lobby` | Join socket room (with or without `playerId` for spectating) |
+| `join-lobby` | Join socket room (with or without `playerId`; spectating without `playerId` is allowed only for public started games) |
 | `leave-lobby` | Leave and remove player from lobby (waiting/pre-game) |
 | `update-settings` | Host updates lobby settings |
 | `update-lobby-name` | Host renames the lobby |
@@ -343,7 +349,11 @@ Words loaded from `words-en.txt` / `words-de.txt` at server startup. Host select
 
 ### UI Language (per browser)
 
-Global toggle in top-right corner. Switches all interface text between English and German. Stored in `localStorage` (`uiLanguage` key). Falls back to English for missing keys.
+Global toggle in top-right corner. Switches all interface text between English and German.
+
+- On first visit (no saved preference), UI language defaults to the browser's preferred language (`navigator.languages`/`navigator.language`) when it matches `en` or `de`.
+- Once selected, preference is stored in `localStorage` (`uiLanguage`) and reused on future visits.
+- Missing translation keys still fall back to English.
 
 ## Troubleshooting
 
@@ -351,7 +361,7 @@ Global toggle in top-right corner. Switches all interface text between English a
 - **Empty/failed build after refactor** — Run `npm run build` in `client/` and `node --check server/src/*.js`.
 - **Words not changing by language** — Verify `wordLanguage` is saved in lobby settings before starting. Ensure word files exist with 25+ lines.
 - **Player can't rejoin after refresh** — Check that `localStorage` has the `lobbyPlayers` entry for that lobby. The server keeps the player slot on disconnect; only explicit `leave-lobby` removes it.
-- **Past games missing** — Check that `localStorage` still contains the same `browserId`; clearing site storage creates a new browser identity.
+- **History results missing** — Check that `localStorage` still contains the same `browserId`; clearing site storage creates a new browser identity.
 - **Game state not updating** — Verify the socket is connected and joined to the correct lobby room. Check browser console for socket errors.
 - **Deploy fails with missing Claude token file** — Create `/home/pi/.claude-oauth` and place only the OAuth token string in the file (no `export`, no quotes), then rerun `deploy-pi.sh`.
 - **Claude runs manually but fails in systemd service** — Ensure the generated service has `ProtectHome=false` so the runtime user can access home-based Claude auth/config files.
@@ -359,7 +369,8 @@ Global toggle in top-right corner. Switches all interface text between English a
 ## Notes
 
 - If the server restarts during an active game, that active game is lost.
-- Finished games are archived in SQLite and can be reloaded from `Past Games` for participating browsers.
-- Private lobbies are not visible in the public list but are joinable via invite link.
+- Finished games are archived in SQLite and can be reloaded via the history endpoints for participating browsers.
+- Private lobbies are not visible in waiting-lobby or spectate lists, but are joinable via invite link.
+- Private started games are not spectatable without joining as a lobby player.
 - The rematch flow creates a new private lobby with cloned settings; the old game is not reused.
 - Spectators join by navigating to a game URL without a stored `playerId` for that lobby.

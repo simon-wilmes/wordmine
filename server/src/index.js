@@ -105,6 +105,59 @@ function buildClaudeErrorDiagnostics(error) {
   };
 }
 
+function classifyClaudeCommandError(error) {
+  const code = String(error?.code || "").toUpperCase();
+  if (code === "CLI_TIMEOUT") return "runtime_exceeded";
+  return "command_failed";
+}
+
+function logAICommandIssue(message, payload) {
+  // Keep this compact and always visible so operators can spot AI runtime issues quickly.
+  console.warn(`[llm-clue] ${message}`, payload ?? {});
+}
+
+function makeSystemChatId(prefix = "system") {
+  return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
+}
+
+function getPlayerNameById(game, playerId) {
+  return game?.players?.find((player) => player.id === playerId)?.name || "AI";
+}
+
+async function postAICommandIssueToChat(lobbyId, { aiPlayerId, issueType, phase }) {
+  const game = getGame(lobbyId);
+  if (!game) return;
+  const aiName = getPlayerNameById(game, aiPlayerId);
+  let text = `${aiName}: AI command issue (${issueType}).`;
+  if (issueType === "runtime_exceeded") {
+    text = `${aiName}: AI request timed out while waiting for a response.`;
+  }
+  appendChatMessage(game, {
+    id: makeSystemChatId("ai-warning"),
+    at: Date.now(),
+    playerId: null,
+    name: "System",
+    type: "system",
+    text: phase ? `${text} Phase: ${phase}.` : text
+  });
+  await emitGameStateToLobby(lobbyId);
+}
+
+async function postAIRetriesExceededToChat(lobbyId, { aiPlayerId, phase }) {
+  const game = getGame(lobbyId);
+  if (!game) return;
+  const aiName = getPlayerNameById(game, aiPlayerId);
+  appendChatMessage(game, {
+    id: makeSystemChatId("ai-retry-limit"),
+    at: Date.now(),
+    playerId: null,
+    name: "System",
+    type: "system",
+    text: `${aiName}: AI retries exceeded (${phase || "unknown phase"}).`
+  });
+  await emitGameStateToLobby(lobbyId);
+}
+
 function sleep(ms) {
   if (!ms || ms <= 0) return Promise.resolve();
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -343,17 +396,6 @@ function getAIGuesserIds(game) {
   });
 }
 
-function formatGuesserHistory(round) {
-  if (!round?.board?.cards) return "";
-  const cardByIndex = new Map(round.board.cards.map((card) => [card.index, card]));
-  const entries = [];
-  for (const idx of round?.clueSelectedIndexes || []) {
-    const card = cardByIndex.get(idx);
-    if (card) entries.push(`${card.word}: target-green`);
-  }
-  return entries.join(", ");
-}
-
 function formatOwnClicks(round, guesserId) {
   const guesser = round?.guessers?.[guesserId];
   if (!guesser) return "none";
@@ -426,6 +468,21 @@ async function runAIAgentClueSubmissionCore({
       });
     } catch (error) {
       previousError = error?.message || "Claude CLI call failed.";
+      const issueType = classifyClaudeCommandError(error);
+      logAICommandIssue("ai command issue", {
+        lobbyId,
+        aiPlayerId,
+        attempt,
+        issueType,
+        error: previousError
+      });
+      if (issueType === "runtime_exceeded") {
+        await postAICommandIssueToChat(lobbyId, {
+          aiPlayerId,
+          issueType,
+          phase: label
+        });
+      }
       logLLM(`${label} attempt failed before parse`, {
         lobbyId,
         roundNumber: liveGame?.roundNumber,
@@ -494,6 +551,18 @@ async function runAIAgentClueSubmissionCore({
 
     return { submitted: true, aborted: false, lastError: null };
   }
+
+  logAICommandIssue("ai retries exceeded", {
+    lobbyId,
+    aiPlayerId,
+    maxAttempts,
+    status: "retries_exceeded",
+    lastError: previousError || null
+  });
+  await postAIRetriesExceededToChat(lobbyId, {
+    aiPlayerId,
+    phase: label
+  });
 
   return { submitted: false, aborted: false, lastError: previousError || null };
 }
@@ -608,6 +677,17 @@ async function runSingleAIGuesserTurn(lobbyId, guesserId) {
 
       if (retryCount >= maxGuessRetries) {
         setAIGuesserStop(round, guesserId, "ai-plan-failed");
+        logAICommandIssue("ai guess retries exceeded", {
+          lobbyId,
+          roundNumber: liveGame.roundNumber,
+          guesserId,
+          maxAttempts: maxGuessRetries,
+          status: "retries_exceeded"
+        });
+        await postAIRetriesExceededToChat(lobbyId, {
+          aiPlayerId: guesserId,
+          phase: "guess planning"
+        });
         logLLM("ai guesser stopped", {
           lobbyId,
           roundNumber: liveGame.roundNumber,
@@ -634,6 +714,23 @@ async function runSingleAIGuesserTurn(lobbyId, guesserId) {
         retryCount += 1;
         round.aiGuessRetryCounts[guesserId] = retryCount;
         previousError = error?.message || "Guess planning call failed.";
+        const issueType = classifyClaudeCommandError(error);
+        logAICommandIssue("ai guess command issue", {
+          lobbyId,
+          roundNumber: liveGame.roundNumber,
+          guesserId,
+          attempt,
+          retriesUsed: retryCount,
+          issueType,
+          error: previousError
+        });
+        if (issueType === "runtime_exceeded") {
+          await postAICommandIssueToChat(lobbyId, {
+            aiPlayerId: guesserId,
+            issueType,
+            phase: "guess planning"
+          });
+        }
         logLLM("guess planning call failed", {
           lobbyId,
           roundNumber: liveGame.roundNumber,
@@ -728,7 +825,6 @@ async function runSingleAIGuesserTurn(lobbyId, guesserId) {
           feedback = [
             `Your latest click '${card?.word || idx}' was non-target green.`,
             `Your clicks so far: ${ownClicks}.`,
-            `Current target clue cards: ${formatGuesserHistory(currentGame.round)}.`,
             "Update your remaining ordered guesses."
           ].join(" ");
           needsReplanAfterNeutral = true;
@@ -1176,6 +1272,10 @@ io.on("connection", (socket) => {
         if (ack) ack({ ok: false, error: "Game not started." });
         return;
       }
+      if (lobby.settings.visibility !== "public") {
+        if (ack) ack({ ok: false, error: "Private games cannot be spectated." });
+        return;
+      }
       socket.join(lobbyId);
       socket.data.lobbyId = lobbyId;
       socket.data.playerId = null;
@@ -1316,6 +1416,14 @@ io.on("connection", (socket) => {
     if (!game) {
       if (ack) ack({ ok: false, error: "Game not started." });
       return;
+    }
+
+    if (!playerId) {
+      const lobby = getLobby(lobbyId);
+      if (lobby?.settings?.visibility !== "public") {
+        if (ack) ack({ ok: false, error: "Private games cannot be spectated." });
+        return;
+      }
     }
 
     const view = getGameViewForPlayer(game, playerId);

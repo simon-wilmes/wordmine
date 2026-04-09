@@ -29,10 +29,10 @@ const TRANSLATIONS = {
     newLandingSubtitle: "Brief your team. Create a private lobby and launch the operation.",
     nameLengthError: "Name must be 2-25 characters.",
     createLobbyFailed: "Could not create lobby.",
-    activeLobbies: "Waiting Lobbies",
+    activeLobbies: "Public Lobbies",
     refresh: "Refresh",
     loadingLobbies: "Loading lobbies...",
-    noActiveLobbies: "No waiting lobbies yet.",
+    noActiveLobbies: "No public lobbies yet.",
     ongoingGames: "Spectate Games",
     loadingGames: "Loading games...",
     noOngoingGames: "No ongoing games right now.",
@@ -219,16 +219,18 @@ const TRANSLATIONS = {
     rulesExampleText: "Clue: 'Ocean 2'. You guess WAVE (correct target), then PORT (neutral green, no points), then MINE (red card). Your turn ends on red and the penalty is applied.",
 
     rulesCoreTitle: "Core Rules",
-    rulesCoreIntro: "Phases in the UI follow mission language: HANDLER TRANSMITTING, OPERATIVES ACTIVE, and MISSION DEBRIEF.",
-    rulesCoreFlowBullet1: "Clue phase: the active clue giver selects target cards and sends one-word clue + count.",
-    rulesCoreFlowBullet2: "Guess phase: guessers single-click to mark and double-click to commit a guess.",
+    rulesCoreIntro: "Each round has multiple phases. In the UI they appear as: HANDLER TRANSMITTING, OPERATIVES ACTIVE, and MISSION DEBRIEF.",
+    rulesCoreFlowBullet1: "HANDLER TRANSMITTING (Clue phase): the active clue giver selects target cards and sends one-word clue + count.",
+    rulesCoreFlowBullet2: "OPERATIVES ACTIVE (Guess phase): guessers single-click to mark and double-click to commit each guess.",
     rulesCoreFlowBullet3: "Correct target green guesses score points for both guessers and clue giver.",
     rulesCoreFlowBullet4: "Non-target green guesses are neutral: no score, no penalty, guess is consumed.",
     rulesCoreFlowBullet5: "Red or black guesses finish that guesser instantly for the round.",
-    rulesCoreFlowBullet6: "If guess time expires, unfinished guessers are marked timed out and round flow continues.",
+    rulesCoreFlowBullet6: "If guess time expires, unfinished guessers are marked timed out and the game moves to MISSION DEBRIEF.",
     rulesCoreOutro: "After each round, MISSION DEBRIEF reveals outcomes before the next round starts.",
 
     rulesAdvancedTitle: "Scoring & Modes",
+    rulesModesTitle: "Modes",
+    rulesScoringTitle: "Points",
     rulesAdvancedIntro: "Scoring has a few clear point types you should know.",
     rulesAdvancedBullet1: "Standard mode rotates clue giver each round.",
     rulesAdvancedBullet2: "Simultaneous clue mode lets everyone give clues on their own boards at the same time, then resolves each clue in sequence.",
@@ -271,10 +273,10 @@ const TRANSLATIONS = {
     newLandingSubtitle: "Team briefen. Erstelle eine private Lobby und starte die Mission.",
     nameLengthError: "Der Name muss 2-25 Zeichen lang sein.",
     createLobbyFailed: "Lobby konnte nicht erstellt werden.",
-    activeLobbies: "Wartende Lobbys",
+    activeLobbies: "Öffentliche Lobbys",
     refresh: "Aktualisieren",
     loadingLobbies: "Lobbys werden geladen...",
-    noActiveLobbies: "Noch keine wartenden Lobbys.",
+    noActiveLobbies: "Noch keine öffentlichen Lobbys.",
     ongoingGames: "Spiele zum Zuschauen",
     loadingGames: "Spiele werden geladen...",
     noOngoingGames: "Derzeit keine laufenden Spiele.",
@@ -461,16 +463,18 @@ const TRANSLATIONS = {
     rulesExampleText: "Hinweis: 'Ozean 2'. Du tippst WELLE (richtiges Ziel), dann HAFEN (neutrales Grün, keine Punkte), dann MINE (rote Karte). Dein Zug endet bei Rot und die Strafe wird verrechnet.",
 
     rulesCoreTitle: "Grundregeln",
-    rulesCoreIntro: "Die Phasen in der UI heißen: HANDLER TRANSMITTING, OPERATIVES ACTIVE und MISSION DEBRIEF.",
-    rulesCoreFlowBullet1: "Hinweisphase: der aktive Hinweisgeber markiert Ziele und sendet ein Wort + Zahl.",
-    rulesCoreFlowBullet2: "Ratephase: Rater markieren per einfachem Klick und tippen per Doppelklick.",
+    rulesCoreIntro: "Jede Runde hat mehrere Phasen. In der UI heißen sie: HANDLER TRANSMITTING, OPERATIVES ACTIVE und MISSION DEBRIEF.",
+    rulesCoreFlowBullet1: "HANDLER TRANSMITTING (Hinweisphase): der aktive Hinweisgeber markiert Ziele und sendet ein Wort + Zahl.",
+    rulesCoreFlowBullet2: "OPERATIVES ACTIVE (Ratephase): Rater markieren per einfachem Klick und bestätigen jeden Tipp per Doppelklick.",
     rulesCoreFlowBullet3: "Richtige Zielkarten geben Punkte für Rater und Hinweisgeber.",
     rulesCoreFlowBullet4: "Nicht-Ziel-Grün ist neutral: keine Punkte, keine Strafe, Tipp ist verbraucht.",
     rulesCoreFlowBullet5: "Rote oder schwarze Tipps beenden den Rater sofort für diese Runde.",
-    rulesCoreFlowBullet6: "Wenn die Ratezeit endet, werden offene Rater als Zeit abgelaufen markiert und es geht weiter.",
+    rulesCoreFlowBullet6: "Wenn die Ratezeit endet, werden offene Rater als Zeit abgelaufen markiert und das Spiel wechselt zu MISSION DEBRIEF.",
     rulesCoreOutro: "Nach jeder Runde zeigt MISSION DEBRIEF die Ergebnisse, bevor die nächste Runde startet.",
 
     rulesAdvancedTitle: "Punkte & Modi",
+    rulesModesTitle: "Modi",
+    rulesScoringTitle: "Punkte",
     rulesAdvancedIntro: "Beim Scoring gibt es ein paar klare Punktarten, die wichtig sind.",
     rulesAdvancedBullet1: "Im Standardmodus wechselt der Hinweisgeber jede Runde.",
     rulesAdvancedBullet2: "Im Simultanmodus geben alle gleichzeitig Hinweise auf ihren eigenen Boards, danach wird jeder Hinweis nacheinander als Teilrunde gespielt.",
@@ -490,18 +494,57 @@ const TRANSLATIONS = {
 };
 
 function readStoredLanguage() {
-  const value = String(localStorage.getItem("uiLanguage") || "en").toLowerCase();
-  return ["en", "de"].includes(value) ? value : "en";
+  const supported = ["en", "de"];
+
+  const normalize = (value) => {
+    const parsed = String(value || "").toLowerCase();
+    if (!parsed) return null;
+    const base = parsed.split("-")[0];
+    return supported.includes(base) ? base : null;
+  };
+
+  const stored = normalize(typeof localStorage !== "undefined" ? localStorage.getItem("uiLanguage") : null);
+  if (stored) {
+    return { language: stored, source: "localStorage" };
+  }
+
+  const browserCandidates = typeof navigator !== "undefined"
+    ? [
+      ...(Array.isArray(navigator.languages) ? navigator.languages : []),
+      navigator.language
+    ]
+    : [];
+
+  for (const candidate of browserCandidates) {
+    const matched = normalize(candidate);
+    if (matched) {
+      return { language: matched, source: `browser (${candidate})` };
+    }
+  }
+
+  return { language: "en", source: "fallback (default)" };
 }
 
 export function I18nProvider({ children }) {
-  const [language, setLanguage] = useState(readStoredLanguage);
+  const [language, setLanguage] = useState(() => {
+    const { language: initialLanguage, source } = readStoredLanguage();
+    console.log(`[i18n] loaded language from ${source}: ${initialLanguage}`);
+    if (source.startsWith("browser") && typeof navigator !== "undefined") {
+      console.log("[i18n] navigator details", {
+        language: navigator.language,
+        languages: navigator.languages
+      });
+    }
+    return initialLanguage;
+  });
 
   const api = useMemo(() => {
     const t = (key) => TRANSLATIONS[language]?.[key] || TRANSLATIONS.en[key] || key;
     const setUiLanguage = (nextLanguage) => {
       const value = ["en", "de"].includes(nextLanguage) ? nextLanguage : "en";
-      localStorage.setItem("uiLanguage", value);
+      if (typeof localStorage !== "undefined") {
+        localStorage.setItem("uiLanguage", value);
+      }
       setLanguage(value);
     };
     return { language, setUiLanguage, t };

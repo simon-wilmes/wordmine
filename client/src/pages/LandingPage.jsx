@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { createLobby, getGameHistory, getLobby, joinLobby, listGames, listLobbies } from "../lib/api";
+import { createLobby, getLobby, joinLobby, listGames, listLobbies } from "../lib/api";
 import { useI18n } from "../lib/i18n";
 import {
   clearStoredPlayerId,
@@ -95,11 +95,9 @@ export default function LandingPage() {
   const [, setLoadingGames] = useState(true);
   const [gamesError, setGamesError] = useState("");
   const [myGames, setMyGames] = useState([]);
-  const [pastGames, setPastGames] = useState([]);
-  const [pastGamesError, setPastGamesError] = useState("");
-  const [, setLoadingPastGames] = useState(true);
   const [modalMode, setModalMode] = useState(null);
   const [selectedLobbyId, setSelectedLobbyId] = useState("");
+  const [selectedLobbyName, setSelectedLobbyName] = useState("");
   const [inviteJoinMode, setInviteJoinMode] = useState(false);
   const browserId = useMemo(() => getOrCreateBrowserId(), []);
 
@@ -172,37 +170,16 @@ export default function LandingPage() {
     setMyGames(results.filter(Boolean));
   }
 
-  async function refreshPastGames({ silent = false } = {}) {
-    if (!silent) {
-      setLoadingPastGames(true);
-      setPastGamesError("");
-    }
-    try {
-      const data = await getGameHistory(browserId, 30, 0);
-      setPastGames(data.games || []);
-    } catch (err) {
-      if (!silent) {
-        setPastGamesError(err.message || "Failed to load history.");
-      }
-    } finally {
-      if (!silent) {
-        setLoadingPastGames(false);
-      }
-    }
-  }
-
   useEffect(() => {
     refreshLobbies();
     refreshGames();
     refreshMyGames();
-    refreshPastGames();
     const id = setInterval(() => {
       refreshLobbies({ silent: true });
     }, 3000);
     const gamesId = setInterval(() => {
       refreshGames({ silent: true });
       refreshMyGames();
-      refreshPastGames({ silent: true });
     }, 5000);
     return () => {
       clearInterval(id);
@@ -213,6 +190,20 @@ export default function LandingPage() {
   useEffect(() => {
     const inviteLobbyId = search.get("join");
     if (!inviteLobbyId) return;
+
+    let mounted = true;
+
+    async function resolveInviteLobbyName() {
+      try {
+        const data = await getLobby(inviteLobbyId);
+        if (!mounted) return;
+        setSelectedLobbyName(data?.lobby?.name || "");
+      } catch {
+        if (!mounted) return;
+        setSelectedLobbyName("");
+      }
+    }
+
     const next = new URLSearchParams(search);
     next.delete("join");
     next.delete("joinSource");
@@ -223,9 +214,16 @@ export default function LandingPage() {
     }
     const isInvite = search.get("joinSource") === "invite";
     setSelectedLobbyId(inviteLobbyId);
+    const inviteLobby = lobbies.find((lobby) => lobby.id === inviteLobbyId);
+    setSelectedLobbyName(inviteLobby?.name || "");
+    resolveInviteLobbyName();
     setInviteJoinMode(isInvite);
     setModalMode("join");
-  }, [search, setSearch, navigate]);
+
+    return () => {
+      mounted = false;
+    };
+  }, [search, setSearch, navigate, lobbies]);
 
   async function handleCreate({ name, visibility, lobbyName }) {
     const data = await createLobby(name, visibility, lobbyName, browserId, language);
@@ -250,6 +248,7 @@ export default function LandingPage() {
             className="cta"
             onClick={() => {
               setSelectedLobbyId("");
+              setSelectedLobbyName("");
               setModalMode("create");
             }}
           >
@@ -287,6 +286,7 @@ export default function LandingPage() {
                     return;
                   }
                   setSelectedLobbyId(lobby.id);
+                  setSelectedLobbyName(lobby.name || "");
                   setInviteJoinMode(false);
                   setModalMode("join");
                 }}
@@ -352,41 +352,6 @@ export default function LandingPage() {
         </ul>
       </section>
 
-      <section className="card">
-        <div className="active-missions-header">
-          <h2>{t("pastGames")}</h2>
-        </div>
-
-        {pastGamesError && <p className="error">{pastGamesError}</p>}
-        {!pastGamesError && pastGames.length === 0 && (
-          <p style={{ color: "var(--text-muted)", fontSize: "0.85rem" }}>{t("noPastGames")}</p>
-        )}
-
-        <ul className="lobby-list">
-          {pastGames.map((game) => (
-            <li key={game.gameId} className="lobby-item">
-              <div>
-                <div className="lobby-mission-code">{game.lobbyName || `Mission ${game.lobbyId}`}</div>
-                <p className="lobby-meta">
-                  {game.playersCount} {t("players")}
-                  &nbsp;·&nbsp;
-                  {new Date(game.finishedAt).toLocaleString()}
-                  {game.winnerName ? (
-                    <>
-                      &nbsp;·&nbsp;
-                      {t("winner")}: {game.winnerName} ({game.winnerScore} {t("pts")})
-                    </>
-                  ) : null}
-                </p>
-              </div>
-              <button onClick={() => navigate(`/game/${game.lobbyId}`)}>
-                {t("viewResults")}
-              </button>
-            </li>
-          ))}
-        </ul>
-      </section>
-
       {modalMode === "create" && (
         <NameModal
           title={modalTitle}
@@ -401,13 +366,14 @@ export default function LandingPage() {
 
       {modalMode === "join" && (
         <NameModal
-          title={`${modalTitle}: ${selectedLobbyId}`}
+          title={`${modalTitle}: ${selectedLobbyName || selectedLobbyId}`}
           submitLabel={t("joinLobby")}
           onSubmit={handleJoin}
           t={t}
           onClose={() => {
             setModalMode(null);
             setInviteJoinMode(false);
+            setSelectedLobbyName("");
           }}
         />
       )}

@@ -250,7 +250,7 @@ function updateLobbyName(lobbyId, playerId, newName) {
 
 function listPublicLobbies() {
   return Array.from(lobbies.values())
-    .filter((lobby) => lobby.status === "waiting")
+    .filter((lobby) => lobby.status === "waiting" && lobby.settings.visibility === "public")
     .map((lobby) => ({
       id: lobby.id,
       name: lobby.name || null,

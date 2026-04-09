@@ -4,6 +4,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 import spyImg from "../../assets/spy/spy-silhouette.svg";
+import ClueyWordmark from "./ClueyWordmark";
 
 const AGENT_POOL = [
   { name: "Viktor Ashford",   height: "6'1\"", dob: "12.03.1971", codename: "NIGHTOWL" },
@@ -130,7 +131,7 @@ export default function AgentCard({ className = "" }) {
     <div className={`agent-card ${className}`}>
       <div className="agent-card__header">
         <span className="agent-card__op-label">OPERATION</span>
-        <span className="agent-card__op-name">CLUEY</span>
+        <ClueyWordmark className="agent-card__op-name" />
       </div>
 
       <div className="agent-card__stripe" />
